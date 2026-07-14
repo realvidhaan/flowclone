@@ -18,7 +18,7 @@ import PersistenceKit
 final class AppController: ObservableObject {
     private let log = Logger(subsystem: "com.flowclone.app", category: "AppController")
 
-    private let hotkeys = HotkeyService(hotkey: .fn)
+    private let hotkeys: HotkeyService
     private let audio = AudioCaptureService()
     let indicator = IndicatorController()
 
@@ -26,9 +26,14 @@ final class AppController: ObservableObject {
     private var session: (any TranscriptionSession)?
     private let injector: any TextInjector = PasteInjector()
 
+    let dataStore: DataStore
+    let settings: SettingsStore
+
     /// Bundle ID of the app focused when recording started — used for the
-    /// per-app formatting hint and (later) history.
+    /// per-app formatting hint and history.
     private var targetBundleID: String?
+    /// Timestamp when the user released the key (for latency measurement).
+    private var releaseTime: Date?
 
     @Published private(set) var state: DictationState = .idle
     @Published private(set) var hotkeyActive = false
@@ -43,7 +48,10 @@ final class AppController: ObservableObject {
     private let holdDebounce: Duration = .milliseconds(150)
     private var armTask: Task<Void, Never>?
 
-    init() {
+    init(dataStore: DataStore, settings: SettingsStore) {
+        self.dataStore = dataStore
+        self.settings = settings
+        self.hotkeys = HotkeyService(hotkey: settings.hotkey)
         audio.onLevel = { [weak self] level in
             self?.lastLevel = level
             self?.indicator.update(level: level)
@@ -51,6 +59,15 @@ final class AppController: ObservableObject {
         hotkeys.onEvent = { [weak self] event in
             self?.handle(hotkey: event)
         }
+        // Seed the built-in app profiles on first run.
+        dataStore.seedAppProfilesIfNeeded(
+            AppProfileDefaults.all.map { ($0.bundleID, $0.displayName, $0.formattingHint) }
+        )
+    }
+
+    /// Re-applies the configured hotkey (called when the user changes it).
+    func applyHotkeySetting() {
+        hotkeys.update(hotkey: settings.hotkey)
     }
 
     // MARK: Startup
@@ -117,7 +134,8 @@ final class AppController: ObservableObject {
 
     private func startSession() async {
         do {
-            let session = try await sttEngine.makeSession(contextualStrings: [])
+            let terms = dataStore.activeDictionaryTerms()
+            let session = try await sttEngine.makeSession(contextualStrings: terms)
             // Only attach if we're still recording (user may have released).
             guard case .recording = state else {
                 await session.cancel()
@@ -143,6 +161,7 @@ final class AppController: ObservableObject {
 
         switch state {
         case .recording:
+            releaseTime = Date()
             transition(.hotkeyUp)          // -> transcribing
             indicator.setState(.processing)
             Task { [weak self] in await self?.finishTranscription() }
@@ -171,12 +190,15 @@ final class AppController: ObservableObject {
                 return
             }
             // cleaning: run the LLM cleanup pass (or fast/deterministic path).
-            let hint = AppProfileDefaults.hint(forBundleID: targetBundleID)
-            let request = CleanupRequest(raw: transcript, dictionary: [], appHint: hint)
-            let cleaned = await makeCleanupPipeline().cleanup(request)
+            let hint = dataStore.hint(forBundleID: targetBundleID)
+                ?? AppProfileDefaults.hint(forBundleID: targetBundleID)
+            let terms = dataStore.activeDictionaryTerms()
+            let request = CleanupRequest(raw: transcript, dictionary: terms, appHint: hint)
+            let (cleaned, llmName) = await runCleanup(request)
             lastTranscript = cleaned
             transition(.cleaned(cleaned))       // cleaning -> injecting
             inject(cleaned)
+            recordHistory(raw: transcript, cleaned: cleaned, llmEngine: llmName)
         } catch {
             log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
             indicator.setState(.error("Transcription failed"))
@@ -185,17 +207,46 @@ final class AppController: ObservableObject {
         }
     }
 
-    /// Builds the cleanup chain from current settings. With a Groq key: Groq
-    /// (fast, smart) with Apple Foundation Models as the offline fallback. With
-    /// no key: an empty engine list, so the pipeline uses the fast deterministic
-    /// LocalPolish — keeping the out-of-box experience quick.
-    private func makeCleanupPipeline() -> CleanupPipeline {
-        var engines: [any CleanupEngine] = []
-        if let key = KeychainStore.get(.groqAPIKey), !key.isEmpty {
-            engines.append(GroqCleanupEngine(apiKey: key))
-            engines.append(FoundationModelCleanupEngine())
+    /// Runs cleanup and reports which engine layer produced the text (best
+    /// effort, for history). Engine selection follows the user's setting.
+    private func runCleanup(_ request: CleanupRequest) async -> (String, String) {
+        let engines = cleanupEngines()
+        let name = engines.first?.displayName ?? "Local polish"
+        let cleaned = await CleanupPipeline(engines: engines).cleanup(request)
+        return (cleaned, name)
+    }
+
+    /// Builds the cleanup chain from the user's engine choice.
+    /// - `.auto`: Groq if a key is set (with Apple FM offline fallback), else local polish.
+    private func cleanupEngines() -> [any CleanupEngine] {
+        let key = KeychainStore.get(.groqAPIKey)
+        let hasKey = (key?.isEmpty == false)
+        switch settings.cleanupChoice {
+        case .auto:
+            guard hasKey else { return [] }
+            return [GroqCleanupEngine(apiKey: key, model: settings.groqModel), FoundationModelCleanupEngine()]
+        case .groq:
+            guard hasKey else { return [] }
+            return [GroqCleanupEngine(apiKey: key, model: settings.groqModel)]
+        case .appleFoundation:
+            return [FoundationModelCleanupEngine()]
+        case .ollama:
+            return [OllamaCleanupEngine(model: settings.ollamaModel)]
+        case .localOnly:
+            return []
         }
-        return CleanupPipeline(engines: engines)
+    }
+
+    private func recordHistory(raw: String, cleaned: String, llmEngine: String) {
+        let latency = releaseTime.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
+        dataStore.addRecord(TranscriptionRecord(
+            rawText: raw,
+            cleanedText: cleaned,
+            sttEngine: sttEngine.displayName,
+            llmEngine: llmEngine,
+            latencyMS: latency,
+            targetBundleID: targetBundleID
+        ))
     }
 
     private func inject(_ text: String) {
