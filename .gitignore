@@ -1,0 +1,12 @@
+.DS_Store
+.build/
+build/
+*.xcodeproj
+!*.xcodeproj/
+.swiftpm/
+xcuserdata/
+DerivedData/
+*.o
+*.swiftmodule
+.env
+secrets.local
