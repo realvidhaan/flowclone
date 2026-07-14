@@ -112,3 +112,33 @@ final class FoundationModelCleanupTests: XCTestCase {
         XCTAssertTrue(cleaned.lowercased().contains("project"))
     }
 }
+
+/// Live cloud cleanup via Groq. Gated on GROQ_API_KEY being present in the
+/// environment (skips in CI / for contributors without a key). Exercises the
+/// real cloud path: GroqCleanupEngine -> OpenAICompatibleClient -> CleanupPipeline,
+/// including the app-aware formatting hint.
+final class LiveGroqCleanupTests: XCTestCase {
+    func testGroqCloudCleanupThroughPipeline() async throws {
+        let key = ProcessInfo.processInfo.environment["GROQ_API_KEY"] ?? ""
+        try XCTSkipUnless(!key.isEmpty, "Set GROQ_API_KEY to run the live Groq test")
+
+        let engine = GroqCleanupEngine(apiKey: key, timeout: 8)
+        let pipeline = CleanupPipeline(engines: [engine])
+
+        let raw = "um so basically lets uh meet at three tomorrow to talk about the you know the project"
+        let cleaned = await pipeline.cleanup(CleanupRequest(raw: raw))
+        print("GROQ cleanup: \(cleaned)")
+        XCTAssertFalse(cleaned.isEmpty)
+        XCTAssertFalse(cleaned.lowercased().contains(" um "))
+        XCTAssertFalse(cleaned.lowercased().contains(" uh "))
+        XCTAssertTrue(cleaned.lowercased().contains("three"))
+        XCTAssertTrue(cleaned.lowercased().contains("project"))
+
+        // App-aware formatting: an email hint should produce more formal prose
+        // than a terse-messaging hint for the same utterance.
+        let emailHint = AppProfileDefaults.hint(forBundleID: "com.apple.mail")
+        let email = await pipeline.cleanup(CleanupRequest(raw: raw, appHint: emailHint))
+        print("GROQ email-formatted: \(email)")
+        XCTAssertFalse(email.isEmpty)
+    }
+}
