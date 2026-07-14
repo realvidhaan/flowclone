@@ -10,11 +10,15 @@ public enum KeyEventPoster {
     /// Synthesizes a key down + up with the given modifier flags.
     public static func post(keyCode: CGKeyCode, flags: CGEventFlags = []) {
         let source = CGEventSource(stateID: .combinedSessionState)
-        let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-        down?.flags = flags
-        let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-        up?.flags = flags
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+        // Build both events up front so we never post a lone key-down (leaving a
+        // modifier stuck) when the key-up can't be created.
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
+            return
+        }
+        down.flags = flags
+        up.flags = flags
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
     }
 }

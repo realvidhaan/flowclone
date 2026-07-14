@@ -104,6 +104,11 @@ final class AppController: ObservableObject {
             commandHotkeys.update(hotkey: settings.commandHotkey)
             commandHotkeys.start()
         } else {
+            // End an in-flight command session before removing its tap, otherwise
+            // its release/cancel event can never arrive and the mic stays live.
+            if currentMode == .command, state.isBusy || armTask != nil {
+                cancel(mode: .command)
+            }
             commandHotkeys.stop()
         }
     }
@@ -226,8 +231,12 @@ final class AppController: ObservableObject {
         }
 
         // Start capturing immediately (cheap), but only reveal the pill and
-        // commit to the session after the debounce, so taps don't flicker.
-        startAudio()
+        // commit to the session after the debounce, so taps don't flicker. If the
+        // mic won't start, surface it instead of showing a dead recording pill.
+        guard startAudio() else {
+            showTransientError("Couldn't start microphone")
+            return
+        }
         let generation = sessionGeneration
         armTask = Task { [weak self] in
             guard let self else { return }
@@ -235,7 +244,7 @@ final class AppController: ObservableObject {
             guard !Task.isCancelled else { return }
             self.transition(.hotkeyDown(mode))
             self.indicator.show(.recording)
-            await self.startSession()
+            await self.startSession(generation: generation)
             // Only clear if this is still our session — a slow `makeSession` could
             // otherwise resume after a newer session has armed and null its task.
             guard generation == self.sessionGeneration else { return }
@@ -243,12 +252,14 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func startSession() async {
+    private func startSession(generation: Int) async {
         do {
             let terms = dataStore.activeDictionaryTerms()
             let session = try await sttEngine.makeSession(contextualStrings: terms)
-            // Only attach if we're still recording (user may have released).
-            guard case .recording = state else {
+            // Only attach if we're still recording *and* this is still the current
+            // session. A stale `makeSession` suspended across a cancel + new session
+            // must not hijack the newer session's audio feed (ABA guard).
+            guard generation == sessionGeneration, case .recording = state else {
                 await session.cancel()
                 return
             }
@@ -301,7 +312,9 @@ final class AppController: ObservableObject {
         do {
             let transcript = try await session.finish()
             guard generation == sessionGeneration else { return }
-            log.info("Transcript: \(transcript, privacy: .public)")
+            // Private: the transcript is the user's dictated speech and must not
+            // land in the unified system log (readable via Console/log show).
+            log.info("Transcript finalized (\(transcript.count, privacy: .public) chars)")
             transition(.transcriptFinalized(transcript))
             // If the transcript was empty the machine is back to idle — stop here.
             guard case .cleaning = state else {
@@ -526,9 +539,14 @@ final class AppController: ObservableObject {
 
     // MARK: Audio
 
-    private func startAudio() {
-        do { try audio.start() } catch {
+    @discardableResult
+    private func startAudio() -> Bool {
+        do {
+            try audio.start()
+            return true
+        } catch {
             log.error("Audio start failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 

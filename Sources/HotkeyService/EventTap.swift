@@ -32,6 +32,10 @@ public final class EventTap: @unchecked Sendable {
     /// Whether the modifier hotkey is currently held (modifier flavor only).
     private var modifierHeld = false
 
+    /// Guards `hotkey`/`modifierHeld`: the tap callback reads/mutates them on the
+    /// tap thread while `updateHotkey` may write from the main actor.
+    private let stateLock = OSAllocatedUnfairLock()
+
     private static let escKeyCode: Int64 = 53
 
     public init(hotkey: Hotkey, handler: @escaping @Sendable (HotkeyEvent) -> Void) {
@@ -40,8 +44,10 @@ public final class EventTap: @unchecked Sendable {
     }
 
     public func updateHotkey(_ newValue: Hotkey) {
+        stateLock.lock()
         hotkey = newValue
         modifierHeld = false
+        stateLock.unlock()
     }
 
     // MARK: Lifecycle
@@ -119,6 +125,9 @@ public final class EventTap: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
+        // Serialize all access to hotkey/modifierHeld against updateHotkey.
+        stateLock.lock()
+        defer { stateLock.unlock() }
         switch hotkey.kind {
         case .modifier(let modifier):
             return handleModifier(modifier, type: type, event: event)

@@ -91,7 +91,15 @@ final class SpeechAnalyzerSession: TranscriptionSession, @unchecked Sendable {
         }
 
         // start(inputSequence:) returns promptly; analysis proceeds as we yield.
-        try await analyzer.start(inputSequence: stream)
+        // If it throws, the results task and input stream are already live — tear
+        // them down so a failed init doesn't leak a running Task.
+        do {
+            try await analyzer.start(inputSequence: stream)
+        } catch {
+            continuation.finish()
+            resultsTask.cancel()
+            throw error
+        }
     }
 
     func feed(_ buffer: AVAudioPCMBuffer) {
