@@ -42,6 +42,11 @@ final class AppController: ObservableObject {
     private var currentMode: SessionMode = .dictation
     /// The selected text captured when Command Mode started.
     private var commandSelection: String?
+    /// Identifies the current session. Bumped when a session starts or is
+    /// cancelled, so an in-flight async pipeline (STT/cleanup) can detect that it
+    /// has been superseded and abort — even if a *new* session has since reached
+    /// the same state (the ABA problem a plain state check can't catch).
+    private var sessionGeneration = 0
 
     // Correction capture ("learning").
     private let corrections = CorrectionObserver(store: UserDefaultsCorrectionCountStore())
@@ -200,6 +205,9 @@ final class AppController: ObservableObject {
         // `armTask == nil` also blocks a second press during the debounce window,
         // when `state` is still `.idle` but a session is already arming.
         guard case .idle = state, armTask == nil else { return }
+        // A fresh session: invalidate any still-suspended pipeline from a prior
+        // session so it can't wake up and inject into this one (ABA guard).
+        sessionGeneration &+= 1
         currentMode = mode
         // Capture the target app now (FlowClone is a menu-bar agent and never
         // becomes frontmost, so this stays the user's app through the session).
@@ -220,6 +228,7 @@ final class AppController: ObservableObject {
         // Start capturing immediately (cheap), but only reveal the pill and
         // commit to the session after the debounce, so taps don't flicker.
         startAudio()
+        let generation = sessionGeneration
         armTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: self.holdDebounce)
@@ -227,6 +236,9 @@ final class AppController: ObservableObject {
             self.transition(.hotkeyDown(mode))
             self.indicator.show(.recording)
             await self.startSession()
+            // Only clear if this is still our session — a slow `makeSession` could
+            // otherwise resume after a newer session has armed and null its task.
+            guard generation == self.sessionGeneration else { return }
             self.armTask = nil
         }
     }
@@ -282,19 +294,23 @@ final class AppController: ObservableObject {
             return
         }
         self.session = nil
+        // Bind this pipeline to the session that started it. If it changes across
+        // an `await`, we were cancelled or superseded — abort without touching the
+        // (now someone else's) state or indicator.
+        let generation = sessionGeneration
         do {
             let transcript = try await session.finish()
+            guard generation == sessionGeneration else { return }
             log.info("Transcript: \(transcript, privacy: .public)")
             transition(.transcriptFinalized(transcript))
-            // If the user cancelled while we were finalizing (or the transcript
-            // was empty), the machine is back to idle — stop here, don't inject.
+            // If the transcript was empty the machine is back to idle — stop here.
             guard case .cleaning = state else {
                 indicator.hide()
                 return
             }
 
             if currentMode == .command {
-                await runCommandEdit(instruction: transcript)
+                await runCommandEdit(generation: generation, instruction: transcript)
                 return
             }
 
@@ -304,8 +320,9 @@ final class AppController: ObservableObject {
             let terms = dataStore.activeDictionaryTerms()
             let request = CleanupRequest(raw: transcript, dictionary: terms, appHint: hint)
             let (cleaned, llmName) = await runCleanup(request)
+            // Bail if cancelled/superseded during the (possibly slow) cleanup pass.
+            guard generation == sessionGeneration else { return }
             transition(.cleaned(cleaned))       // cleaning -> injecting
-            // Bail if cancelled during the (possibly slow) cleanup pass.
             guard case .injecting = state else { return }
             lastTranscript = cleaned
             inject(cleaned)
@@ -351,7 +368,7 @@ final class AppController: ObservableObject {
     // MARK: Command Mode
 
     /// Applies the spoken instruction to the captured selection and replaces it.
-    private func runCommandEdit(instruction: String) async {
+    private func runCommandEdit(generation: Int, instruction: String) async {
         guard let selection = commandSelection else {
             state = .idle
             indicator.hide()
@@ -362,8 +379,9 @@ final class AppController: ObservableObject {
             let edited = try await commandRunner().run(
                 CommandRequest(selection: selection, instruction: instruction)
             )
+            // Bail if the user cancelled or started a new session mid-edit.
+            guard generation == sessionGeneration else { return }
             transition(.cleaned(edited))    // -> injecting
-            // Bail if the user cancelled while the edit was running.
             guard case .injecting = state else { return }
             lastTranscript = edited
             // The selection is still highlighted, so paste replaces it.
@@ -477,6 +495,9 @@ final class AppController: ObservableObject {
         // Esc is emitted on both taps; only the one matching the active session
         // acts (the other is a no-op).
         guard mode == currentMode else { return }
+        // Invalidate any in-flight pipeline so a late STT/cleanup result can't
+        // wake up and inject after the user cancelled.
+        sessionGeneration &+= 1
         armTask?.cancel()
         armTask = nil
         audio.onBuffer = nil
