@@ -45,6 +45,9 @@ public final class HotkeyService {
     /// Starts the tap. Returns whether it started (false ⇒ grant Input Monitoring).
     @discardableResult
     public func start() -> Bool {
+        // Idempotent: a second start() while a tap is live would leak the old tap
+        // and double-fire every key press.
+        if tap != nil { return true }
         let tap = EventTap(hotkey: hotkey) { [weak self] event in
             // EventTap guarantees delivery on the main queue, so we can assume
             // main-actor isolation to reach `onEvent`.

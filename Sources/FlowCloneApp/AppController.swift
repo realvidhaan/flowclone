@@ -42,6 +42,11 @@ final class AppController: ObservableObject {
     private var currentMode: SessionMode = .dictation
     /// The selected text captured when Command Mode started.
     private var commandSelection: String?
+    /// Identifies the current session. Bumped when a session starts or is
+    /// cancelled, so an in-flight async pipeline (STT/cleanup) can detect that it
+    /// has been superseded and abort — even if a *new* session has since reached
+    /// the same state (the ABA problem a plain state check can't catch).
+    private var sessionGeneration = 0
 
     // Correction capture ("learning").
     private let corrections = CorrectionObserver(store: UserDefaultsCorrectionCountStore())
@@ -91,6 +96,21 @@ final class AppController: ObservableObject {
     func applyHotkeySetting() {
         hotkeys.update(hotkey: settings.hotkey)
         commandHotkeys.update(hotkey: settings.commandHotkey)
+    }
+
+    /// Starts or stops the command-mode tap when the user toggles the feature.
+    func applyCommandModeSetting() {
+        if settings.commandModeEnabled {
+            commandHotkeys.update(hotkey: settings.commandHotkey)
+            commandHotkeys.start()
+        } else {
+            // End an in-flight command session before removing its tap, otherwise
+            // its release/cancel event can never arrive and the mic stays live.
+            if currentMode == .command, state.isBusy || armTask != nil {
+                cancel(mode: .command)
+            }
+            commandHotkeys.stop()
+        }
     }
 
     // MARK: Startup
@@ -180,14 +200,19 @@ final class AppController: ObservableObject {
         case .down:
             beginSession(mode)
         case .up:
-            endRecording()
+            endRecording(mode: mode)
         case .cancel:
-            cancel()
+            cancel(mode: mode)
         }
     }
 
     private func beginSession(_ mode: SessionMode) {
-        guard case .idle = state else { return }
+        // `armTask == nil` also blocks a second press during the debounce window,
+        // when `state` is still `.idle` but a session is already arming.
+        guard case .idle = state, armTask == nil else { return }
+        // A fresh session: invalidate any still-suspended pipeline from a prior
+        // session so it can't wake up and inject into this one (ABA guard).
+        sessionGeneration &+= 1
         currentMode = mode
         // Capture the target app now (FlowClone is a menu-bar agent and never
         // becomes frontmost, so this stays the user's app through the session).
@@ -206,25 +231,35 @@ final class AppController: ObservableObject {
         }
 
         // Start capturing immediately (cheap), but only reveal the pill and
-        // commit to the session after the debounce, so taps don't flicker.
-        startAudio()
-        armTask?.cancel()
+        // commit to the session after the debounce, so taps don't flicker. If the
+        // mic won't start, surface it instead of showing a dead recording pill.
+        guard startAudio() else {
+            showTransientError("Couldn't start microphone")
+            return
+        }
+        let generation = sessionGeneration
         armTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: self.holdDebounce)
             guard !Task.isCancelled else { return }
             self.transition(.hotkeyDown(mode))
             self.indicator.show(.recording)
-            await self.startSession()
+            await self.startSession(generation: generation)
+            // Only clear if this is still our session — a slow `makeSession` could
+            // otherwise resume after a newer session has armed and null its task.
+            guard generation == self.sessionGeneration else { return }
+            self.armTask = nil
         }
     }
 
-    private func startSession() async {
+    private func startSession(generation: Int) async {
         do {
             let terms = dataStore.activeDictionaryTerms()
             let session = try await sttEngine.makeSession(contextualStrings: terms)
-            // Only attach if we're still recording (user may have released).
-            guard case .recording = state else {
+            // Only attach if we're still recording *and* this is still the current
+            // session. A stale `makeSession` suspended across a cancel + new session
+            // must not hijack the newer session's audio feed (ABA guard).
+            guard generation == sessionGeneration, case .recording = state else {
                 await session.cancel()
                 return
             }
@@ -240,7 +275,10 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func endRecording() {
+    private func endRecording(mode: SessionMode) {
+        // Only the hotkey that started the session can end it, so tapping the
+        // command hotkey doesn't terminate an active dictation (and vice-versa).
+        guard mode == currentMode else { return }
         armTask?.cancel()
         armTask = nil
         audio.onBuffer = nil
@@ -267,18 +305,25 @@ final class AppController: ObservableObject {
             return
         }
         self.session = nil
+        // Bind this pipeline to the session that started it. If it changes across
+        // an `await`, we were cancelled or superseded — abort without touching the
+        // (now someone else's) state or indicator.
+        let generation = sessionGeneration
         do {
             let transcript = try await session.finish()
-            log.info("Transcript: \(transcript, privacy: .public)")
+            guard generation == sessionGeneration else { return }
+            // Private: the transcript is the user's dictated speech and must not
+            // land in the unified system log (readable via Console/log show).
+            log.info("Transcript finalized (\(transcript.count, privacy: .public) chars)")
             transition(.transcriptFinalized(transcript))
-            guard !transcript.isEmpty else {
-                // Machine already returned to idle on empty transcript.
+            // If the transcript was empty the machine is back to idle — stop here.
+            guard case .cleaning = state else {
                 indicator.hide()
                 return
             }
 
             if currentMode == .command {
-                await runCommandEdit(instruction: transcript)
+                await runCommandEdit(generation: generation, instruction: transcript)
                 return
             }
 
@@ -288,8 +333,11 @@ final class AppController: ObservableObject {
             let terms = dataStore.activeDictionaryTerms()
             let request = CleanupRequest(raw: transcript, dictionary: terms, appHint: hint)
             let (cleaned, llmName) = await runCleanup(request)
-            lastTranscript = cleaned
+            // Bail if cancelled/superseded during the (possibly slow) cleanup pass.
+            guard generation == sessionGeneration else { return }
             transition(.cleaned(cleaned))       // cleaning -> injecting
+            guard case .injecting = state else { return }
+            lastTranscript = cleaned
             inject(cleaned)
             recordHistory(raw: transcript, cleaned: cleaned, llmEngine: llmName)
         } catch {
@@ -333,7 +381,7 @@ final class AppController: ObservableObject {
     // MARK: Command Mode
 
     /// Applies the spoken instruction to the captured selection and replaces it.
-    private func runCommandEdit(instruction: String) async {
+    private func runCommandEdit(generation: Int, instruction: String) async {
         guard let selection = commandSelection else {
             state = .idle
             indicator.hide()
@@ -344,8 +392,11 @@ final class AppController: ObservableObject {
             let edited = try await commandRunner().run(
                 CommandRequest(selection: selection, instruction: instruction)
             )
-            lastTranscript = edited
+            // Bail if the user cancelled or started a new session mid-edit.
+            guard generation == sessionGeneration else { return }
             transition(.cleaned(edited))    // -> injecting
+            guard case .injecting = state else { return }
+            lastTranscript = edited
             // The selection is still highlighted, so paste replaces it.
             inject(edited)
         } catch {
@@ -453,7 +504,13 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func cancel() {
+    private func cancel(mode: SessionMode) {
+        // Esc is emitted on both taps; only the one matching the active session
+        // acts (the other is a no-op).
+        guard mode == currentMode else { return }
+        // Invalidate any in-flight pipeline so a late STT/cleanup result can't
+        // wake up and inject after the user cancelled.
+        sessionGeneration &+= 1
         armTask?.cancel()
         armTask = nil
         audio.onBuffer = nil
@@ -482,9 +539,14 @@ final class AppController: ObservableObject {
 
     // MARK: Audio
 
-    private func startAudio() {
-        do { try audio.start() } catch {
+    @discardableResult
+    private func startAudio() -> Bool {
+        do {
+            try audio.start()
+            return true
+        } catch {
             log.error("Audio start failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 

@@ -100,3 +100,22 @@ final class FoundationModelCommandEditorTests: XCTestCase {
         XCTAssertFalse(edited.lowercased().split(separator: " ").contains("u"))
     }
 }
+
+/// Live cloud command-edit via Groq. Gated on GROQ_API_KEY (skips without it).
+final class LiveGroqCommandEditorTests: XCTestCase {
+    func testLiveGroqEdit() async throws {
+        let key = ProcessInfo.processInfo.environment["GROQ_API_KEY"] ?? ""
+        try XCTSkipUnless(!key.isEmpty, "Set GROQ_API_KEY to run the live Groq command test")
+        let runner = CommandRunner(editors: [GroqCommandEditor(apiKey: key)])
+        let edited = try await runner.run(CommandRequest(
+            selection: "hey can u send me the thing",
+            instruction: "make this more formal"
+        ))
+        print("GROQ command edit: \(edited)")
+        XCTAssertFalse(edited.isEmpty)
+        // Sanitizer should have stripped any <text> wrapper / quoting.
+        XCTAssertFalse(edited.contains("<text>"))
+        XCTAssertFalse(edited.hasPrefix("\""))
+        XCTAssertFalse(edited.lowercased().split(separator: " ").contains("u"))
+    }
+}

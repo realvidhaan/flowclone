@@ -13,6 +13,9 @@ public final class KeystrokeInjector: TextInjector {
 
     public func inject(_ text: String) throws {
         guard !text.isEmpty else { throw InjectionError.empty }
+        // Synthetic key events can't reach a secure field either — report it like
+        // PasteInjector instead of silently succeeding.
+        guard !SecureInputDetector.isEnabled else { throw InjectionError.secureInputActive }
         guard Accessibility.isTrusted else { throw InjectionError.accessibilityNotGranted }
 
         let source = CGEventSource(stateID: .combinedSessionState)
