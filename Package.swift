@@ -44,10 +44,23 @@ let package = Package(
             name: "InjectionKit"
         ),
 
+        // LLM cleanup engines + app-aware formatting.
+        .target(
+            name: "CleanupKit"
+        ),
+
+        // Local persistence: Keychain (secrets) now; SwiftData models in M5.
+        .target(
+            name: "PersistenceKit"
+        ),
+
         // The app itself: SwiftUI @main, MenuBarExtra, UI, dependency wiring.
         .executableTarget(
             name: "FlowCloneApp",
-            dependencies: ["FlowCore", "HotkeyService", "AudioService", "IndicatorUI", "TranscriptionKit", "InjectionKit"]
+            dependencies: [
+                "FlowCore", "HotkeyService", "AudioService", "IndicatorUI",
+                "TranscriptionKit", "InjectionKit", "CleanupKit", "PersistenceKit",
+            ]
         ),
 
         .testTarget(
@@ -69,6 +82,10 @@ let package = Package(
         .testTarget(
             name: "InjectionKitTests",
             dependencies: ["InjectionKit"]
+        ),
+        .testTarget(
+            name: "CleanupKitTests",
+            dependencies: ["CleanupKit"]
         ),
     ]
 )

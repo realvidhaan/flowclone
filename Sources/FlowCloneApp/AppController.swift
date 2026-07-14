@@ -7,6 +7,8 @@ import AudioService
 import IndicatorUI
 import TranscriptionKit
 import InjectionKit
+import CleanupKit
+import PersistenceKit
 
 /// Top-level runtime coordinator. Owns the hotkey, audio, and indicator, and
 /// drives the shared `DictationStateMachine`. In M1 the pipeline ends after
@@ -23,6 +25,10 @@ final class AppController: ObservableObject {
     private let sttEngine: any TranscriptionEngine = SpeechAnalyzerEngine()
     private var session: (any TranscriptionSession)?
     private let injector: any TextInjector = PasteInjector()
+
+    /// Bundle ID of the app focused when recording started — used for the
+    /// per-app formatting hint and (later) history.
+    private var targetBundleID: String?
 
     @Published private(set) var state: DictationState = .idle
     @Published private(set) var hotkeyActive = false
@@ -92,6 +98,9 @@ final class AppController: ObservableObject {
 
     private func beginArming() {
         guard case .idle = state else { return }
+        // Capture the target app now (FlowClone is a menu-bar agent and never
+        // becomes frontmost, so this stays the user's app through the session).
+        targetBundleID = FocusedAppInspector.frontmostBundleID
         // Start capturing immediately (cheap), but only reveal the pill and
         // commit to the session after the debounce, so taps don't flicker.
         startAudio()
@@ -161,17 +170,32 @@ final class AppController: ObservableObject {
                 indicator.hide()
                 return
             }
-            lastTranscript = transcript
-            // M3: inject the raw transcript directly. The LLM cleanup pass slots
-            // in between transcript and injection in M4.
-            transition(.cleaned(transcript))   // cleaning -> injecting (no-op cleanup for now)
-            inject(transcript)
+            // cleaning: run the LLM cleanup pass (or fast/deterministic path).
+            let hint = AppProfileDefaults.hint(forBundleID: targetBundleID)
+            let request = CleanupRequest(raw: transcript, dictionary: [], appHint: hint)
+            let cleaned = await makeCleanupPipeline().cleanup(request)
+            lastTranscript = cleaned
+            transition(.cleaned(cleaned))       // cleaning -> injecting
+            inject(cleaned)
         } catch {
             log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
             indicator.setState(.error("Transcription failed"))
             transition(.failed("Transcription failed"))
             scheduleErrorReset()
         }
+    }
+
+    /// Builds the cleanup chain from current settings. With a Groq key: Groq
+    /// (fast, smart) with Apple Foundation Models as the offline fallback. With
+    /// no key: an empty engine list, so the pipeline uses the fast deterministic
+    /// LocalPolish — keeping the out-of-box experience quick.
+    private func makeCleanupPipeline() -> CleanupPipeline {
+        var engines: [any CleanupEngine] = []
+        if let key = KeychainStore.get(.groqAPIKey), !key.isEmpty {
+            engines.append(GroqCleanupEngine(apiKey: key))
+            engines.append(FoundationModelCleanupEngine())
+        }
+        return CleanupPipeline(engines: engines)
     }
 
     private func inject(_ text: String) {
