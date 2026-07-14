@@ -49,9 +49,16 @@ let package = Package(
             name: "CleanupKit"
         ),
 
-        // Local persistence: Keychain (secrets) now; SwiftData models in M5.
+        // Local persistence: Keychain (secrets) + SwiftData models/stores.
         .target(
             name: "PersistenceKit"
+        ),
+
+        // Data-driven settings views (dictionary, app profiles, history). A
+        // library so they render headlessly in tests.
+        .target(
+            name: "SettingsUI",
+            dependencies: ["PersistenceKit"]
         ),
 
         // The app itself: SwiftUI @main, MenuBarExtra, UI, dependency wiring.
@@ -60,6 +67,7 @@ let package = Package(
             dependencies: [
                 "FlowCore", "HotkeyService", "AudioService", "IndicatorUI",
                 "TranscriptionKit", "InjectionKit", "CleanupKit", "PersistenceKit",
+                "SettingsUI",
             ]
         ),
 
@@ -86,6 +94,14 @@ let package = Package(
         .testTarget(
             name: "CleanupKitTests",
             dependencies: ["CleanupKit"]
+        ),
+        .testTarget(
+            name: "PersistenceKitTests",
+            dependencies: ["PersistenceKit"]
+        ),
+        .testTarget(
+            name: "SettingsUITests",
+            dependencies: ["SettingsUI"]
         ),
     ]
 )

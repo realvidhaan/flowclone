@@ -41,6 +41,11 @@ struct MenuBarContentView: View {
 
         Divider()
 
+        SettingsLink {
+            Text("Settings…")
+        }
+        .keyboardShortcut(",")
+
         Button("Quit FlowClone") {
             NSApplication.shared.terminate(nil)
         }
