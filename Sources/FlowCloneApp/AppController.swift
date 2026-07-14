@@ -6,6 +6,7 @@ import HotkeyService
 import AudioService
 import IndicatorUI
 import TranscriptionKit
+import InjectionKit
 
 /// Top-level runtime coordinator. Owns the hotkey, audio, and indicator, and
 /// drives the shared `DictationStateMachine`. In M1 the pipeline ends after
@@ -21,9 +22,11 @@ final class AppController: ObservableObject {
 
     private let sttEngine: any TranscriptionEngine = SpeechAnalyzerEngine()
     private var session: (any TranscriptionSession)?
+    private let injector: any TextInjector = PasteInjector()
 
     @Published private(set) var state: DictationState = .idle
     @Published private(set) var hotkeyActive = false
+    @Published private(set) var accessibilityGranted = false
     @Published private(set) var lastLevel: Float = 0
     /// The most recent transcript, surfaced in the menu (visible proof STT works
     /// before injection lands in M3).
@@ -60,11 +63,18 @@ final class AppController: ObservableObject {
         if !hotkeyActive {
             log.notice("Hotkey inactive — Input Monitoring not granted yet")
         }
+        accessibilityGranted = Accessibility.isTrusted
     }
 
     func retryHotkey() {
         guard !hotkeyActive else { return }
         hotkeyActive = hotkeys.start()
+        accessibilityGranted = Accessibility.isTrusted
+    }
+
+    func requestAccessibility() {
+        Accessibility.requestIfNeeded()
+        accessibilityGranted = Accessibility.isTrusted
     }
 
     // MARK: Hotkey handling
@@ -146,17 +156,43 @@ final class AppController: ObservableObject {
             let transcript = try await session.finish()
             log.info("Transcript: \(transcript, privacy: .public)")
             transition(.transcriptFinalized(transcript))
-            if !transcript.isEmpty {
-                lastTranscript = transcript
+            guard !transcript.isEmpty else {
+                // Machine already returned to idle on empty transcript.
+                indicator.hide()
+                return
             }
-            // M2 stops at the transcript; cleanup + injection arrive in M3/M4.
-            // Drive the machine to idle for now.
-            state = .idle
-            indicator.hide()
+            lastTranscript = transcript
+            // M3: inject the raw transcript directly. The LLM cleanup pass slots
+            // in between transcript and injection in M4.
+            transition(.cleaned(transcript))   // cleaning -> injecting (no-op cleanup for now)
+            inject(transcript)
         } catch {
             log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
             indicator.setState(.error("Transcription failed"))
             transition(.failed("Transcription failed"))
+            scheduleErrorReset()
+        }
+    }
+
+    private func inject(_ text: String) {
+        do {
+            try injector.inject(text)
+            transition(.injected)          // -> idle
+            indicator.hide()
+        } catch InjectionError.secureInputActive {
+            log.notice("Secure input active; text left on clipboard")
+            indicator.setState(.error("Secure field — copied instead"))
+            transition(.failed("Secure field — copied instead"))
+            scheduleErrorReset()
+        } catch InjectionError.accessibilityNotGranted {
+            log.notice("Accessibility not granted; cannot inject")
+            indicator.setState(.error("Grant Accessibility to insert text"))
+            transition(.failed("Grant Accessibility"))
+            scheduleErrorReset()
+        } catch {
+            log.error("Injection failed: \(error.localizedDescription, privacy: .public)")
+            indicator.setState(.error("Couldn't insert text"))
+            transition(.failed("Injection failed"))
             scheduleErrorReset()
         }
     }

@@ -39,10 +39,15 @@ let package = Package(
             name: "TranscriptionKit"
         ),
 
+        // Text injection into the focused app (paste primary, keystroke fallback).
+        .target(
+            name: "InjectionKit"
+        ),
+
         // The app itself: SwiftUI @main, MenuBarExtra, UI, dependency wiring.
         .executableTarget(
             name: "FlowCloneApp",
-            dependencies: ["FlowCore", "HotkeyService", "AudioService", "IndicatorUI", "TranscriptionKit"]
+            dependencies: ["FlowCore", "HotkeyService", "AudioService", "IndicatorUI", "TranscriptionKit", "InjectionKit"]
         ),
 
         .testTarget(
@@ -60,6 +65,10 @@ let package = Package(
         .testTarget(
             name: "TranscriptionKitTests",
             dependencies: ["TranscriptionKit"]
+        ),
+        .testTarget(
+            name: "InjectionKitTests",
+            dependencies: ["InjectionKit"]
         ),
     ]
 )

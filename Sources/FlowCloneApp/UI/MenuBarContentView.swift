@@ -24,6 +24,15 @@ struct MenuBarContentView: View {
             }
         }
 
+        if !controller.accessibilityGranted {
+            Divider()
+            Text("⚠︎ Accessibility needed to insert text")
+                .foregroundStyle(.secondary)
+            Button("Grant Accessibility…") {
+                controller.requestAccessibility()
+            }
+        }
+
         if !controller.lastTranscript.isEmpty {
             Divider()
             Text("Last: \(controller.lastTranscript)")
