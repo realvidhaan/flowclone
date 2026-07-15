@@ -55,8 +55,9 @@ final class GroqWhisperSession: TranscriptionSession, @unchecked Sendable {
     func finish() async throws -> String {
         guard !samples.isEmpty else { return "" }
         let wav = WAVEncoder.encode(samples: samples, sampleRate: Int(PCMConverter.sampleRate))
-        // The `prompt` biases Whisper toward the user's dictionary spellings.
-        let prompt = promptTerms.isEmpty ? nil : promptTerms.joined(separator: ", ")
+        // Bias Whisper toward the user's dictionary spellings via an example-style
+        // prompt, budgeted to Whisper's ~224-token cap with the top terms last.
+        let prompt = BiasPrompt.build(terms: promptTerms)
         return try await GroqTranscriptionClient.transcribe(
             wav: wav, apiKey: apiKey, model: model, prompt: prompt, timeout: timeout
         )

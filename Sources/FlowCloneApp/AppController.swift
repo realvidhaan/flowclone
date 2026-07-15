@@ -97,6 +97,9 @@ final class AppController: ObservableObject {
         dataStore.seedAppProfilesIfNeeded(
             AppProfileDefaults.all.map { ($0.bundleID, $0.displayName, $0.formattingHint) }
         )
+        // Promote already-learned dictionary substitutions into active
+        // replacement rules so accepted corrections finally take effect.
+        dataStore.seedReplacementRulesFromDictionaryIfNeeded()
     }
 
     /// Re-applies the configured hotkeys (called when the user changes them).
@@ -339,11 +342,17 @@ final class AppController: ObservableObject {
                 return
             }
 
+            // Apply deterministic replacement rules first (STT → rules → cleanup),
+            // so the LLM sees already-corrected names/terms.
+            let rules = dataStore.activeReplacementRules().map {
+                Replacement(originals: $0.originals, replacement: $0.replacement)
+            }
+            let corrected = ReplacementRules.apply(transcript, rules: rules)
             // cleaning: run the LLM cleanup pass (or fast/deterministic path).
             let hint = dataStore.hint(forBundleID: targetBundleID)
                 ?? AppProfileDefaults.hint(forBundleID: targetBundleID)
             let terms = dataStore.activeDictionaryTerms()
-            let request = CleanupRequest(raw: transcript, dictionary: terms, appHint: hint)
+            let request = CleanupRequest(raw: corrected, dictionary: terms, appHint: hint)
             let (cleaned, llmName) = await runCleanup(request)
             // Bail if cancelled/superseded during the (possibly slow) cleanup pass.
             guard generation == sessionGeneration else { return }
@@ -541,6 +550,11 @@ final class AppController: ObservableObject {
     func acceptSuggestion() {
         guard let suggestion = pendingSuggestion else { return }
         dataStore.addDictionaryEntry(DictionaryEntry(written: suggestion.to, spoken: suggestion.from))
+        // Also add a replacement rule so the fix applies deterministically to the
+        // next transcript, not just as a spelling hint.
+        dataStore.addReplacementRule(
+            ReplacementRule(originals: [suggestion.from], replacement: suggestion.to, isLearned: true)
+        )
         corrections.clear(suggestion)
         pendingSuggestion = nil
     }
