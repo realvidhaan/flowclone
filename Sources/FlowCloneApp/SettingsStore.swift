@@ -15,6 +15,7 @@ final class SettingsStore: ObservableObject {
         static let cleanupEngine = "cleanup.engine"
         static let ollamaModel = "cleanup.ollamaModel"
         static let groqModel = "cleanup.groqModel"
+        static let groqSmartModel = "cleanup.groqSmartModel"
         static let sttEngine = "stt.engine"
         static let trimSilence = "stt.trimSilence"
         static let learnFromCorrections = "learning.enabled"
@@ -77,8 +78,14 @@ final class SettingsStore: ObservableObject {
     @Published var ollamaModel: String {
         didSet { defaults.set(ollamaModel, forKey: Keys.ollamaModel) }
     }
+    /// Fast model — the always-on cleanup pass on every dictation.
     @Published var groqModel: String {
         didSet { defaults.set(groqModel, forKey: Keys.groqModel) }
+    }
+    /// Stronger model — used for harder passes (reformatting, long transcripts,
+    /// dictionary-term corrections, Command Mode) where the fast model slips.
+    @Published var groqSmartModel: String {
+        didSet { defaults.set(groqSmartModel, forKey: Keys.groqSmartModel) }
     }
     /// Not persisted directly here — read/written through the Keychain.
     @Published var groqAPIKey: String {
@@ -107,6 +114,7 @@ final class SettingsStore: ObservableObject {
         trimSilence = defaults.object(forKey: Keys.trimSilence) as? Bool ?? true
         ollamaModel = defaults.string(forKey: Keys.ollamaModel) ?? "llama3.2"
         groqModel = defaults.string(forKey: Keys.groqModel) ?? "llama-3.1-8b-instant"
+        groqSmartModel = defaults.string(forKey: Keys.groqSmartModel) ?? "llama-3.3-70b-versatile"
         groqAPIKey = KeychainStore.get(.groqAPIKey) ?? ""
         launchAtLogin = SMAppService.mainApp.status == .enabled
         learnFromCorrections = defaults.bool(forKey: Keys.learnFromCorrections)

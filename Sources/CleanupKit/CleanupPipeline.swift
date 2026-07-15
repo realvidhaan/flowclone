@@ -20,9 +20,10 @@ public enum CleanupPostGuard {
     }
 }
 
-/// The cleanup chain: fast-path short utterances deterministically, otherwise
-/// try engines in order (each with a timeout and post-guard), falling back to a
-/// deterministic local polish so text always comes out.
+/// The cleanup chain: always run an LLM pass (so even short phrases are cleaned),
+/// trying engines in order (each with a timeout and post-guard), and falling back
+/// to a deterministic local polish so text always comes out — even offline or
+/// when every engine fails.
 public struct CleanupPipeline: Sendable {
     private let engines: [any CleanupEngine]
     private let perEngineTimeout: Duration
@@ -38,11 +39,9 @@ public struct CleanupPipeline: Sendable {
         let raw = request.raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return "" }
 
-        // Fast path: skip the LLM for very short utterances.
-        if LocalPolish.isShort(raw) {
-            return LocalPolish.polish(raw)
-        }
-
+        // An LLM pass runs on every non-empty utterance — the fast model is cheap,
+        // and even short phrases benefit from real cleanup. `LocalPolish` is only
+        // the terminal fallback below (offline / no engine / all engines failed).
         for engine in engines {
             guard await engine.isAvailable() else { continue }
             do {

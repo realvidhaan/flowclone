@@ -363,7 +363,9 @@ final class AppController: ObservableObject {
             let request = CleanupRequest(
                 raw: corrected, dictionary: terms, appHint: userHint, style: style, examples: examples
             )
-            let (cleaned, llmName) = await runCleanup(request)
+            // Escalate to the stronger model for the passes the fast one slips on.
+            let smart = needsSmartCleanup(transcript: corrected, style: style, dictionary: terms)
+            let (cleaned, llmName) = await runCleanup(request, smart: smart)
             // Bail if cancelled/superseded during the (possibly slow) cleanup pass.
             guard generation == sessionGeneration else { return }
             transition(.cleaned(cleaned))       // cleaning -> injecting
@@ -380,26 +382,46 @@ final class AppController: ObservableObject {
     }
 
     /// Runs cleanup and reports which engine layer produced the text (best
-    /// effort, for history). Engine selection follows the user's setting.
-    private func runCleanup(_ request: CleanupRequest) async -> (String, String) {
-        let engines = cleanupEngines()
+    /// effort, for history). `smart` selects the stronger, slightly slower model
+    /// and a longer timeout for harder passes.
+    private func runCleanup(_ request: CleanupRequest, smart: Bool) async -> (String, String) {
+        let engines = cleanupEngines(smart: smart)
         let name = engines.first?.displayName ?? "Local polish"
-        let cleaned = await CleanupPipeline(engines: engines).cleanup(request)
+        // The smart model needs a little more headroom; the fast pass stays snappy.
+        let timeout: Duration = smart ? .milliseconds(5000) : .milliseconds(2500)
+        let cleaned = await CleanupPipeline(engines: engines, perEngineTimeout: timeout).cleanup(request)
         return (cleaned, name)
     }
 
-    /// Builds the cleanup chain from the user's engine choice.
+    /// Whether a cleanup pass should use the stronger model: structural
+    /// reformatting (lists / email / markdown), long transcripts (where the fast
+    /// model drops words), or a dictionary/jargon term that must be spelled right.
+    private func needsSmartCleanup(transcript: String, style: CleanupStyle?, dictionary: [String]) -> Bool {
+        if let structure = style?.structure, structure == .email || structure == .markdown || structure == .lists {
+            return true
+        }
+        let wordCount = transcript.split(whereSeparator: { $0.isWhitespace }).count
+        if wordCount >= 25 { return true }
+        let lowered = transcript.lowercased()
+        if dictionary.contains(where: { !$0.isEmpty && lowered.contains($0.lowercased()) }) { return true }
+        return false
+    }
+
+    /// Builds the cleanup chain from the user's engine choice. `smart` picks the
+    /// stronger Groq model (and a longer request timeout) over the fast default.
     /// - `.auto`: Groq if a key is set (with Apple FM offline fallback), else local polish.
-    private func cleanupEngines() -> [any CleanupEngine] {
+    private func cleanupEngines(smart: Bool) -> [any CleanupEngine] {
         let key = KeychainStore.get(.groqAPIKey)
         let hasKey = (key?.isEmpty == false)
+        let model = smart ? settings.groqSmartModel : settings.groqModel
+        let timeout: TimeInterval = smart ? 5 : 2.5
         switch settings.cleanupChoice {
         case .auto:
             guard hasKey else { return [] }
-            return [GroqCleanupEngine(apiKey: key, model: settings.groqModel), FoundationModelCleanupEngine()]
+            return [GroqCleanupEngine(apiKey: key, model: model, timeout: timeout), FoundationModelCleanupEngine()]
         case .groq:
             guard hasKey else { return [] }
-            return [GroqCleanupEngine(apiKey: key, model: settings.groqModel)]
+            return [GroqCleanupEngine(apiKey: key, model: model, timeout: timeout)]
         case .appleFoundation:
             return [FoundationModelCleanupEngine()]
         case .ollama:
@@ -500,7 +522,9 @@ final class AppController: ObservableObject {
     private func commandRunner() -> CommandRunner {
         var editors: [any CommandEditor] = []
         if let key = KeychainStore.get(.groqAPIKey), !key.isEmpty {
-            editors.append(GroqCommandEditor(apiKey: key, model: settings.groqModel))
+            // Command Mode applies an instruction to a selection — the hard case,
+            // so use the stronger model.
+            editors.append(GroqCommandEditor(apiKey: key, model: settings.groqSmartModel))
         }
         editors.append(FoundationModelCommandEditor())
         return CommandRunner(editors: editors)
