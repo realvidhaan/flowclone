@@ -93,8 +93,9 @@ struct GeneralSettingsView: View {
                 }
                 if settings.cleanupChoice == .groq || settings.cleanupChoice == .auto {
                     SecureField("Groq API key", text: $settings.groqAPIKey)
-                    TextField("Groq model", text: $settings.groqModel)
-                    Text("Free key at console.groq.com. Transcript text is sent to Groq for cleanup.")
+                    TextField("Fast model (every dictation)", text: $settings.groqModel)
+                    TextField("Smart model (lists, email, long or difficult text)", text: $settings.groqSmartModel)
+                    Text("Free key at console.groq.com. Every dictation is cleaned with the fast model; reformatting, long phrases, and Command Mode use the smart model.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if settings.cleanupChoice == .ollama {
