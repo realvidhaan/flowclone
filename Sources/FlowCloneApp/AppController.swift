@@ -349,10 +349,20 @@ final class AppController: ObservableObject {
             }
             let corrected = ReplacementRules.apply(transcript, rules: rules)
             // cleaning: run the LLM cleanup pass (or fast/deterministic path).
-            let hint = dataStore.hint(forBundleID: targetBundleID)
-                ?? AppProfileDefaults.hint(forBundleID: targetBundleID)
+            // Resolve the target app's built-in personality (tone + structure +
+            // examples); let a user-edited hint override the personality's text.
+            let personality = AppProfileDefaults.personality(forBundleID: targetBundleID)
+            let userHint = dataStore.hint(forBundleID: targetBundleID)
+            let style: CleanupStyle? = personality.map { p in
+                var s = p.style
+                if let userHint, !userHint.isEmpty { s.hint = userHint }
+                return s
+            }
+            let examples = CleanupPrompt.defaultExamples + (personality?.examples ?? [])
             let terms = dataStore.activeDictionaryTerms()
-            let request = CleanupRequest(raw: corrected, dictionary: terms, appHint: hint)
+            let request = CleanupRequest(
+                raw: corrected, dictionary: terms, appHint: userHint, style: style, examples: examples
+            )
             let (cleaned, llmName) = await runCleanup(request)
             // Bail if cancelled/superseded during the (possibly slow) cleanup pass.
             guard generation == sessionGeneration else { return }
