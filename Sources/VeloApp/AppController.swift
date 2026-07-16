@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 import os
-import FlowCore
+import VeloCore
 import HotkeyService
 import AudioService
 import IndicatorUI

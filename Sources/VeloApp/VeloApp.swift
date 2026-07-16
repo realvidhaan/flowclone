@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import FlowCore
+import VeloCore
 import PersistenceKit
 
 /// Velo is a menu-bar-only (`LSUIElement`) app. There is no main window;

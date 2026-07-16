@@ -1,5 +1,5 @@
 import XCTest
-@testable import FlowCore
+@testable import VeloCore
 
 final class DictationStateMachineTests: XCTestCase {
     private func reduce(_ s: DictationState, _ e: DictationEvent) -> DictationState {
