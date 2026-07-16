@@ -24,6 +24,7 @@ final class SettingsStore: ObservableObject {
         static let commandModifier = "command.modifier"
         static let commandModeEnabled = "command.enabled"
         static let launchAtLoginDefaulted = "launchAtLogin.defaulted"
+        static let voiceProcessingReset = "stt.voiceProcessing.reset"
     }
 
     var hasCompletedOnboarding: Bool {
@@ -119,7 +120,12 @@ final class SettingsStore: ObservableObject {
         let sttRaw = defaults.string(forKey: Keys.sttEngine) ?? STTChoice.auto.rawValue
         sttChoice = STTChoice(rawValue: sttRaw) ?? .auto
         trimSilence = defaults.object(forKey: Keys.trimSilence) as? Bool ?? true
-        voiceProcessing = defaults.object(forKey: Keys.voiceProcessing) as? Bool ?? true
+        // Default OFF: Apple's VP-IO unit can suppress *all* mic input on an
+        // input-only AVAudioEngine (no output render reference for its AEC),
+        // which made Whisper hallucinate "Thank you" on the resulting silence.
+        // Raw capture + GainNormalizer still delivers the whisper boost; VP-IO is
+        // opt-in until its silent-capture failure mode is fully resolved.
+        voiceProcessing = defaults.object(forKey: Keys.voiceProcessing) as? Bool ?? false
         ollamaModel = defaults.string(forKey: Keys.ollamaModel) ?? "llama3.2"
         groqModel = defaults.string(forKey: Keys.groqModel) ?? "llama-3.1-8b-instant"
         groqSmartModel = defaults.string(forKey: Keys.groqSmartModel) ?? "llama-3.3-70b-versatile"
@@ -144,6 +150,17 @@ final class SettingsStore: ObservableObject {
         if SMAppService.mainApp.status != .enabled {
             launchAtLogin = true // didSet registers the login item
         }
+    }
+
+    /// One-time reset of the voice-processing preference to OFF. The first Phase 7
+    /// build shipped it defaulting ON, which broke capture (silent mic → Whisper
+    /// hallucinated "Thank you"). If a user had it persisted ON, flipping the code
+    /// default alone wouldn't reach them — so force it off once. Runs a single
+    /// time; a user can still turn it back on afterward and that choice sticks.
+    func resetVoiceProcessingOnceIfNeeded() {
+        guard !defaults.bool(forKey: Keys.voiceProcessingReset) else { return }
+        defaults.set(true, forKey: Keys.voiceProcessingReset)
+        if voiceProcessing { voiceProcessing = false } // didSet persists it
     }
 
     private func updateLaunchAtLogin(_ enabled: Bool) {

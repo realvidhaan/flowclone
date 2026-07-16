@@ -41,6 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Default to launching at login so the app is always available (survives
         // reboots); one-time, and the user can turn it off in Settings.
         controller.settings.applyDefaultLaunchAtLoginIfNeeded()
+        // Undo the broken Phase 7 default (VP-IO ON → silent capture) for anyone
+        // who already ran that build.
+        controller.settings.resetVoiceProcessingOnceIfNeeded()
         controller.startServices()
         onboarding.showIfNeeded()
     }
