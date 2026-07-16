@@ -11,8 +11,12 @@ struct VeloApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        MenuBarExtra("Velo", systemImage: "mic.fill") {
+        MenuBarExtra {
             MenuBarContentView(controller: delegate.controller)
+        } label: {
+            // The Velo mark as a template glyph — macOS tints it for the menu bar.
+            Image(nsImage: VeloMark.menuBarImage)
+                .accessibilityLabel("Velo")
         }
         .menuBarExtraStyle(.menu)
 
