@@ -83,8 +83,8 @@ struct GeneralSettingsView: View {
                 Toggle("Trim silence before transcription", isOn: $settings.trimSilence)
                 Text("Removes dead air at the start and end of each recording — fewer misfires, faster results.")
                     .font(.caption).foregroundStyle(.secondary)
-                Toggle("Whisper & noise reduction", isOn: $settings.voiceProcessing)
-                Text("Boosts quiet or whispered speech and suppresses background noise. Hold the mic close when whispering — a loud nearby talker may still be picked up. Takes effect on your next dictation.")
+                Toggle("Extra noise suppression (experimental)", isOn: $settings.voiceProcessing)
+                Text("Routes the mic through Apple's voice processing to suppress background noise. Experimental: on some Macs it can mute the mic entirely, so it's off by default. Whisper boosting works regardless of this setting. Takes effect on your next dictation.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
