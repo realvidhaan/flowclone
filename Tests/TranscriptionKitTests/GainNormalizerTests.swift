@@ -36,6 +36,14 @@ final class GainNormalizerTests: XCTestCase {
         XCTAssertLessThanOrEqual(peak(out), 0.9 + 1e-5)
     }
 
+    func testClampsOutOfRangeTargetPeak() {
+        // A target above full scale must not break the no-clipping guarantee —
+        // it's clamped to ≤ 1 so the boosted peak never exceeds full scale.
+        let quiet: [Float] = [0.05, -0.04, 0.03, -0.05, 0.02]
+        let out = GainNormalizer.normalize(quiet, targetPeak: 1.2)
+        XCTAssertLessThanOrEqual(peak(out), 1.0)
+    }
+
     func testEmptyInput() {
         XCTAssertEqual(GainNormalizer.normalize([]), [])
     }

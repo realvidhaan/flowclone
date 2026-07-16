@@ -29,6 +29,11 @@ public enum GainNormalizer {
     ) -> [Float] {
         guard !samples.isEmpty else { return samples }
 
+        // Clamp to (0, 1] so the no-clipping guarantee holds even if a caller
+        // passes an out-of-range target (e.g. 1.2 would push samples past full
+        // scale). 0.999 rather than 1.0 leaves a hair of headroom.
+        let target = min(max(targetPeak, 0.0001), 0.999)
+
         var peak: Float = 0
         for sample in samples { peak = max(peak, abs(sample)) }
 
@@ -37,7 +42,7 @@ public enum GainNormalizer {
 
         // Only ever boost (gain ≥ 1); never attenuate already-loud speech. Cap so
         // a very quiet clip doesn't get slammed to the ceiling.
-        let gain = min(max(targetPeak / peak, 1.0), maxGain)
+        let gain = min(max(target / peak, 1.0), maxGain)
         guard gain > 1.0001 else { return samples }
 
         return samples.map { $0 * gain }

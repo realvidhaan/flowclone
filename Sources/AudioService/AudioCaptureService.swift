@@ -156,15 +156,20 @@ public final class AudioCaptureService {
         // rebuilt on wake. Re-tap if we were running.
         guard running else { return }
         log.info("Audio configuration changed; re-tapping input")
+        // A device switch or wake-time IO-unit rebuild can drop voice processing,
+        // so re-assert it before re-tapping. `setVoiceProcessingEnabled` only
+        // succeeds on a **stopped** engine, though — reconfiguring it while the
+        // engine is still running throws (silently, here) and leaves capture in
+        // the wrong voice-processing state. So stop first, reconfigure, then
+        // re-tap and restart.
+        if engine.isRunning { engine.stop() }
         engine.inputNode.removeTap(onBus: 0)
-        // A device switch or wake-time IO-unit rebuild can drop voice processing;
-        // re-assert it before re-tapping so the new format is the processed one.
         configureVoiceProcessing()
         installTap()
-        if !engine.isRunning {
-            do { try engine.start() } catch {
-                log.error("Failed to restart engine after config change: \(error.localizedDescription, privacy: .public)")
-            }
+        do {
+            try engine.start()
+        } catch {
+            log.error("Failed to restart engine after config change: \(error.localizedDescription, privacy: .public)")
         }
     }
 
