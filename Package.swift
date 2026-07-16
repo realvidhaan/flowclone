@@ -8,7 +8,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "Velo", targets: ["VeloApp"]),
-        .library(name: "FlowCore", targets: ["FlowCore"]),
+        .library(name: "VeloCore", targets: ["VeloCore"]),
     ],
     dependencies: [
         // On-device Whisper (CoreML/ANE) for offline, private transcription.
@@ -18,13 +18,13 @@ let package = Package(
         // Pure logic core: state machine, session model, engine registry.
         // No AppKit — unit-testable via `swift test`.
         .target(
-            name: "FlowCore"
+            name: "VeloCore"
         ),
 
         // Global hold-to-talk hotkey via CGEventTap.
         .target(
             name: "HotkeyService",
-            dependencies: ["FlowCore"]
+            dependencies: ["VeloCore"]
         ),
 
         // Microphone capture via AVAudioEngine: audio level + (later) STT feed.
@@ -89,15 +89,15 @@ let package = Package(
         .executableTarget(
             name: "VeloApp",
             dependencies: [
-                "FlowCore", "HotkeyService", "AudioService", "IndicatorUI",
+                "VeloCore", "HotkeyService", "AudioService", "IndicatorUI",
                 "TranscriptionKit", "InjectionKit", "CleanupKit", "PersistenceKit",
                 "SettingsUI", "LearningKit", "OnboardingUI", "CommandModeKit",
             ]
         ),
 
         .testTarget(
-            name: "FlowCoreTests",
-            dependencies: ["FlowCore"]
+            name: "VeloCoreTests",
+            dependencies: ["VeloCore"]
         ),
         .testTarget(
             name: "HotkeyServiceTests",

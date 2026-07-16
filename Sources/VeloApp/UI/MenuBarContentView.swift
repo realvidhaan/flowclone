@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit   // NSApplication.shared — don't rely on SwiftUI re-exporting it.
-import FlowCore
+import VeloCore
 import HotkeyService
 import LearningKit
 

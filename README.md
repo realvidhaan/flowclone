@@ -66,7 +66,7 @@ LLM are swappable between local and cloud implementations:
 CGEventTap (hotkey) → DictationController → AudioCapture → Transcription → Cleanup → TextInjection
 ```
 
-Logic lives in the `FlowCore` library (unit-tested with `swift test`); the
+Logic lives in the `VeloCore` library (unit-tested with `swift test`); the
 `VeloApp` executable target holds `@main`, the SwiftUI menu-bar UI, and the
 floating recording indicator.
 
