@@ -10,3 +10,4 @@ DerivedData/
 *.swiftmodule
 .env
 secrets.local
+Resources/Velo.iconset/
