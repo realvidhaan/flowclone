@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Velo — Just speak, it's written. Voice dictation for macOS</title>
+  <meta name="description" content="Velo is an open-source macOS voice dictation app. Hold a key anywhere, speak, and clean, formatted text lands at your cursor — in any app. Free and MIT-licensed." />
+  <meta property="og:title" content="Velo — Just speak, it's written." />
+  <meta property="og:description" content="Open-source voice dictation for macOS. Hold a key, speak, release. Clean text at your cursor, in any app." />
+  <meta property="og:type" content="website" />
+  <meta name="theme-color" content="#000000" />
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="cursor-glow" aria-hidden="true"></div>
+
+  <!-- SVG icon defs -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M8.5 21h7"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.2-2.8 7.7-7 9-4.2-1.3-7-4.8-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></symbol>
+    <symbol id="i-wand" viewBox="0 0 24 24"><path d="M15 4V2M15 10V8M18 7h2M10 7h2"/><path d="M14 6l6 6-9 9-6-6 9-9z"/><path d="M11 9l3 3"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2.2"/><circle cx="10" cy="16" r="2.2"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 3v3M14 3v3M10 18v3M14 18v3M3 10h3M3 14h3M18 10h3M18 14h3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-4.5L4 8M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14 4.5L20 16M20 20v-4h-4"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5c2.5-1 5.5-1 8 0v14c-2.5-1-5.5-1-8 0V5z"/><path d="M12 5c2.5-1 5.5-1 8 0v14c-2.5-1-5.5-1-8 0"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5M3 17l9 5 9-5" opacity=".6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+    <symbol id="i-menubar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/></symbol>
+    <linearGradient id="g-gem" x1="2" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#4587f4"/><stop offset=".48" stop-color="#9b72cb"/><stop offset="1" stop-color="#e0698a"/></linearGradient>
+    <symbol id="l-openai" viewBox="0 0 24 24"><path fill="currentColor" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.1419.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.6069 1.4997-2.602-1.4997z"/></symbol>
+    <symbol id="l-gemini" viewBox="0 0 24 24"><path fill="url(#g-gem)" d="M12 24A14.304 14.304 0 0 0 0 12 14.304 14.304 0 0 0 12 0a14.305 14.305 0 0 0 12 12 14.305 14.305 0 0 0-12 12"/></symbol>
+    <symbol id="l-claude" viewBox="0 0 24 24"><g fill="#d97757"><path d="M12 2.5C13 6 13 18 12 21.5 11 18 11 6 12 2.5Z"/><path d="M12 2.5C13 6 13 18 12 21.5 11 18 11 6 12 2.5Z" transform="rotate(22.5 12 12)"/><path d="M12 2.5C13 6 13 18 12 21.5 11 18 11 6 12 2.5Z" transform="rotate(45 12 12)"/><path d="M12 2.5C13 6 13 18 12 21.5 11 18 11 6 12 2.5Z" transform="rotate(67.5 12 12)"/><path d="M12 2.5C13 6 13 18 12 21.5 11 18 11 6 12 2.5Z" transform="rotate(90 12 12)"/><path d="M12 2.5C13 6 13 18 12 21.5 11 18 11 6 12 2.5Z" transform="rotate(112.5 12 12)"/><path d="M12 2.5C13 6 13 18 12 21.5 11 18 11 6 12 2.5Z" transform="rotate(135 12 12)"/><path d="M12 2.5C13 6 13 18 12 21.5 11 18 11 6 12 2.5Z" transform="rotate(157.5 12 12)"/></g></symbol>
+  </defs></svg>
+
+  <!-- floating pill nav -->
+  <header class="nav">
+    <nav class="pill" aria-label="Primary">
+      <a class="brand" href="#top" aria-label="Velo home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-word">Velo</span>
+      </a>
+      <span class="pill-div" aria-hidden="true"></span>
+      <div class="pill-links">
+        <a href="#features">Features</a>
+        <a href="#stack">Works with</a>
+        <a href="https://github.com/realvidhaan/velo" target="_blank" rel="noopener">GitHub</a>
+      </div>
+      <a class="btn btn-download btn-sm" href="https://github.com/realvidhaan/velo/releases/latest/download/Velo.dmg">
+        <svg class="apple" viewBox="0 0 16 16" aria-hidden="true"><path d="M11.05 8.5c-.02-1.6 1.3-2.36 1.36-2.4-.74-1.09-1.9-1.24-2.31-1.25-.98-.1-1.92.58-2.42.58-.5 0-1.27-.57-2.09-.55-1.07.02-2.06.62-2.61 1.58-1.11 1.93-.28 4.78.8 6.34.53.76 1.16 1.62 1.98 1.59.79-.03 1.09-.51 2.05-.51.95 0 1.23.51 2.07.5.85-.02 1.4-.78 1.92-1.55.6-.88.85-1.74.86-1.78-.02-.01-1.65-.63-1.67-2.5zM9.5 3.87c.43-.53.73-1.26.65-1.99-.62.03-1.4.42-1.85.94-.4.46-.76 1.2-.66 1.91.7.05 1.42-.35 1.86-.86z"/></svg>
+        Download
+      </a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <!-- ===== CINEMATIC HERO → scroll-shrinks into demo card ===== -->
+    <div class="hero-stage" id="hero-stage">
+      <div class="hero-sticky">
+        <div class="hero-card" id="hero-card">
+          <div class="sky" aria-hidden="true">
+            <div class="sky-grad"></div>
+            <div class="sky-glow"></div>
+            <div class="sky-vignette"></div>
+            <div class="sky-grain"></div>
+          </div>
+
+          <!-- voice visualizer: a wide band along the bottom horizon -->
+          <div class="hero-viz" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+
+          <!-- HERO copy (fades out on scroll) -->
+          <div class="hero-copy" id="hero-copy">
+            <p class="hero-eyebrow">Voice dictation for macOS</p>
+            <h1 class="hero-title">Just speak.<br />It's written.</h1>
+            <div class="hero-cta">
+              <a class="btn btn-download" href="https://github.com/realvidhaan/velo/releases/latest/download/Velo.dmg">
+                <svg class="apple" viewBox="0 0 16 16" aria-hidden="true"><path d="M11.05 8.5c-.02-1.6 1.3-2.36 1.36-2.4-.74-1.09-1.9-1.24-2.31-1.25-.98-.1-1.92.58-2.42.58-.5 0-1.27-.57-2.09-.55-1.07.02-2.06.62-2.61 1.58-1.11 1.93-.28 4.78.8 6.34.53.76 1.16 1.62 1.98 1.59.79-.03 1.09-.51 2.05-.51.95 0 1.23.51 2.07.5.85-.02 1.4-.78 1.92-1.55.6-.88.85-1.74.86-1.78-.02-.01-1.65-.63-1.67-2.5zM9.5 3.87c.43-.53.73-1.26.65-1.99-.62.03-1.4.42-1.85.94-.4.46-.76 1.2-.66 1.91.7.05 1.42-.35 1.86-.86z"/></svg>
+                Download for macOS
+              </a>
+              <a class="btn btn-glass" href="https://github.com/realvidhaan/velo" target="_blank" rel="noopener">View on GitHub</a>
+            </div>
+            <p class="hero-sub">Turn your voice into polished text.<br />Works in Slack, Gmail, your editor — any app.</p>
+            <p class="hero-note">Free &amp; open source · macOS 26+</p>
+          </div>
+
+          <!-- DEMO copy (fades in on scroll, centered in docked card) -->
+          <div class="demo-copy" id="demo-copy" aria-hidden="true">
+            <p class="demo-kicker">See it work</p>
+            <div class="demo-stage" id="demo-stage">
+              <div class="demo-menubar"><span class="mb-mic"></span></div>
+              <div class="demo-pill"><span class="pill-dot"></span>
+                <span class="pill-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                <span class="pill-label">Listening…</span>
+              </div>
+              <div class="demo-field">
+                <span class="demo-text" id="demo-text"></span><span class="demo-caret"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <a class="scroll-cue" href="#after-hero" aria-label="Scroll" id="scroll-cue">
+          <span>Scroll to see it work</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v14m0 0l-6-6m6 6l6-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+    </div>
+
+    <span id="after-hero"></span>
+
+    <!-- ===== VALUE STRIP ===== -->
+    <section class="strip" data-reveal>
+      <p class="strip-lead">For people who'd rather talk than type.</p>
+      <ul class="strip-stats">
+        <li><span>On-device</span> transcription</li>
+        <li><span>Any app</span>, system-wide</li>
+        <li><span>Free</span> &amp; open source</li>
+      </ul>
+    </section>
+
+    <!-- ===== ADAPTABILITY / per-app tone ===== -->
+    <section class="adapt">
+      <header class="sec-head" data-reveal>
+        <p class="eyebrow tint-violet">Per-app formatting</p>
+        <h2>Your words, dressed for where they land.</h2>
+        <p class="sec-lead">The same sentence should look different in a Slack thread and a legal doc. Velo formats each transcript to fit the app you're speaking into.</p>
+      </header>
+
+      <div class="adapt-demo" data-reveal>
+        <div class="chat">
+          <div class="bubble" id="tone-bubble">Sure, let's book a call for next week — I can walk you through the details then. Let me know what times work.</div>
+        </div>
+        <div class="seg" role="tablist" aria-label="Formatting style">
+          <button class="seg-btn is-active" data-tone="slack" role="tab">Slack</button>
+          <button class="seg-btn" data-tone="email" role="tab">Email</button>
+          <button class="seg-btn" data-tone="notes" role="tab">Notes</button>
+          <button class="seg-btn" data-tone="code" role="tab">Code</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== WHAT'S INSIDE — 3 big screenshot cards ===== -->
+    <section id="features" class="inside">
+      <header class="sec-head center" data-reveal>
+        <p class="eyebrow tint-grad">What's inside</p>
+        <h2>Powerful, and out of your way.</h2>
+      </header>
+
+      <div class="bigrow">
+        <!-- Hold to talk -->
+        <article class="bigcard" data-reveal>
+          <div class="stage wall-blue">
+            <div class="os-menubar">
+              <span class="mb-left"><b></b> Finder File Edit</span>
+              <span class="mb-right"><span class="mb-mic lit"></span><i class="mbi"></i><i class="mbi"></i></span>
+            </div>
+            <div class="hud float">
+              <span class="hud-dot"></span>
+              <span class="hud-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              <span class="hud-label">Listening</span>
+              <span class="hud-key">Fn</span>
+            </div>
+          </div>
+          <div class="bigbody">
+            <span class="tile tile-blue"><svg><use href="#i-mic"/></svg></span>
+            <h3 class="t-blue">Hold-to-talk, anywhere</h3>
+            <p>One global hotkey in every text field, system-wide. Hold, speak, release. <b>Anywhere you can type.</b></p>
+          </div>
+        </article>
+
+        <!-- On-device -->
+        <article class="bigcard" data-reveal>
+          <div class="stage wall-green">
+            <div class="bigtoggle float">
+              <span class="bt-label">On-device</span>
+              <span class="bt-track is-on"><span class="bt-knob"></span></span>
+            </div>
+            <p class="stage-cap">No audio leaves this Mac</p>
+          </div>
+          <div class="bigbody">
+            <span class="tile tile-green"><svg><use href="#i-shield"/></svg></span>
+            <h3 class="t-green">On-device by default</h3>
+            <p>Transcribe locally with Apple's <span class="mono">SpeechAnalyzer</span>; keep cleanup local too. <b>Nothing leaves your Mac.</b></p>
+          </div>
+        </article>
+
+        <!-- Cleanup -->
+        <article class="bigcard" data-reveal>
+          <div class="stage wall-pink">
+            <div class="oswin float tilt">
+              <div class="oswin-bar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span class="oswin-title">Messages</span></div>
+              <div class="oswin-body">
+                <p class="msg-strike">um so like i think we should uh ship it friday</p>
+                <p class="msg-clean">I think we should ship it Friday.</p>
+              </div>
+            </div>
+          </div>
+          <div class="bigbody">
+            <span class="tile tile-pink"><svg><use href="#i-wand"/></svg></span>
+            <h3 class="t-pink">The cleanup pass</h3>
+            <p>Filler gone, punctuation fixed, formatted to the app — before a word hits your cursor. <b>Right the first time.</b></p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ===== SET IT UP YOUR WAY (layered window detail) ===== -->
+    <section class="setup">
+      <div class="setup-mock" data-reveal>
+        <div class="stack">
+          <div class="oswin win-back tilt">
+            <div class="oswin-bar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span class="oswin-title">Velo — Settings</span></div>
+            <div class="oswin-body pad">
+              <div class="set-row"><span class="set-label">Hotkey</span><span class="set-val"><kbd>Fn</kbd> / <kbd>Globe</kbd></span></div>
+              <div class="set-row"><span class="set-label">Speech</span><span class="set-val">SpeechAnalyzer ⌄</span></div>
+              <div class="set-row"><span class="set-label">Cleanup</span><span class="set-val">Apple Foundation ⌄</span></div>
+              <div class="set-row"><span class="set-label">Retain audio</span><span class="switch"><i></i></span></div>
+              <div class="set-row"><span class="set-label">Launch at login</span><span class="switch is-on"><i></i></span></div>
+            </div>
+          </div>
+          <div class="oswin win-front tilt">
+            <div class="oswin-bar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span class="oswin-title">Cleanup engine</span></div>
+            <div class="oswin-body">
+              <div class="dd-row is-sel"><span class="dot dot-g"></span>Apple Foundation Models<span class="tag">local</span></div>
+              <div class="dd-row"><span class="dot dot-b"></span>Ollama<span class="tag">local</span></div>
+              <div class="dd-row"><span class="dot dot-o"></span>Groq<span class="tag tag-cloud">cloud</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="setup-text">
+        <header class="sec-head" data-reveal>
+          <p class="eyebrow tint-orange">Make it yours</p>
+          <h2>Set it up<br />your way.</h2>
+          <p class="sec-lead">Velo lives in your menu bar — no dock icon, no window in your way. Tune the parts that matter and forget it's there.</p>
+        </header>
+        <ul class="subfeat" data-reveal>
+          <li><span class="sf-ico"><svg><use href="#i-sliders"/></svg></span><div><h4>Precision cleanup</h4><p>Set how aggressive the rewrite is, per app.</p></div></li>
+          <li><span class="sf-ico"><svg><use href="#i-chip"/></svg></span><div><h4>Pick your model</h4><p>Local Apple models, Ollama, or free-tier Groq.</p></div></li>
+          <li><span class="sf-ico"><svg><use href="#i-refresh"/></svg></span><div><h4>Learns your corrections</h4><p>Fix a word once and it sticks to your vocabulary.</p></div></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ===== SMALL FEATURES ROW ===== -->
+    <section class="mini">
+      <div class="mini-grid">
+        <div class="mini-item" data-reveal><span class="mini-ico"><svg><use href="#i-book"/></svg></span><h4>Personal dictionary</h4><p>Names, acronyms and jargon it always gets right.</p></div>
+        <div class="mini-item" data-reveal><span class="mini-ico"><svg><use href="#i-clock"/></svg></span><h4>Searchable history</h4><p>Every dictation kept locally, easy to find again.</p></div>
+        <div class="mini-item" data-reveal><span class="mini-ico"><svg><use href="#i-refresh"/></svg></span><h4>Correction capture</h4><p>Edit the output and Velo learns your preference.</p></div>
+        <div class="mini-item" data-reveal><span class="mini-ico"><svg><use href="#i-menubar"/></svg></span><h4>Menu-bar only</h4><p>No dock icon, no window. It's there when you need it.</p></div>
+      </div>
+    </section>
+
+    <!-- ===== WORKS WITH YOUR STACK — orbit ===== -->
+    <section id="stack" class="stack-sec">
+      <div class="stack-copy">
+        <header class="sec-head" data-reveal>
+          <p class="eyebrow tint-violet">Fits your stack</p>
+          <h2>Speed up every<br />agentic workflow.</h2>
+          <p class="sec-lead">Velo types into any app on your Mac, so prompting ChatGPT, steering Claude, or driving agents in Cursor happens at the speed of speech — no window to switch to, no copy-paste. Talk instead of type, and keep your whole AI stack moving.</p>
+        </header>
+      </div>
+
+      <div class="orbit" data-reveal aria-hidden="true">
+        <span class="orbit-glow"></span>
+        <div class="orbit-ring">
+          <div class="node" style="--a:-90deg"><span class="appicon"><img class="appimg" src="assets/icon-chatgpt.png" alt="ChatGPT" width="66" height="66" /></span></div>
+          <div class="node" style="--a:30deg"><span class="appicon"><img class="appimg" src="assets/icon-claude.png" alt="Claude" width="66" height="66" /></span></div>
+          <div class="node" style="--a:150deg"><span class="appicon"><img class="appimg" src="assets/icon-gemini.png" alt="Gemini" width="66" height="66" /></span></div>
+        </div>
+        <div class="orbit-core">
+          <span class="appicon ic-velo">
+            <svg class="velo-glyph" viewBox="0 0 196 170" aria-hidden="true">
+              <rect x="8" y="57" width="16" height="56" rx="8"/><rect x="40" y="41" width="16" height="88" rx="8"/><rect x="72" y="24" width="16" height="122" rx="8"/><rect x="104" y="10" width="16" height="150" rx="8"/><rect x="158" y="10" width="16" height="150" rx="8"/><rect x="144" y="10" width="44" height="14" rx="7"/><rect x="144" y="146" width="44" height="14" rx="7"/>
+            </svg>
+          </span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== FOOTER ===== -->
+  <footer class="footer">
+    <div class="footer-cols" data-reveal>
+      <div class="f-col">
+        <p class="f-head">Product</p>
+        <a href="#features">Features</a>
+        <a href="#stack">Works with</a>
+        <a href="https://github.com/realvidhaan/velo/releases/latest/download/Velo.dmg">Download</a>
+      </div>
+      <div class="f-col">
+        <p class="f-head">Project</p>
+        <a href="https://github.com/realvidhaan/velo" target="_blank" rel="noopener">Source</a>
+        <a href="https://github.com/realvidhaan/velo/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="https://github.com/realvidhaan/velo/issues" target="_blank" rel="noopener">Issues</a>
+      </div>
+      <div class="f-col">
+        <p class="f-head">Links</p>
+        <a href="https://github.com/realvidhaan/velo/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+        <a href="https://github.com/realvidhaan/velo/blob/main/README.md" target="_blank" rel="noopener">Read me</a>
+      </div>
+    </div>
+
+    <a class="footer-word" href="#top" aria-label="Back to top" data-eq>
+      <svg class="footer-mark" viewBox="0 0 196 170" aria-hidden="true">
+        <rect class="fbar" x="8"   y="57"  width="16" height="56"  rx="8"/>
+        <rect class="fbar" x="40"  y="41"  width="16" height="88"  rx="8"/>
+        <rect class="fbar" x="72"  y="24"  width="16" height="122" rx="8"/>
+        <rect class="fbar" x="104" y="10"  width="16" height="150" rx="8"/>
+        <rect class="fbar" x="158" y="10"  width="16" height="150" rx="8"/>
+        <rect x="144" y="10"  width="44" height="14" rx="7"/>
+        <rect x="144" y="146" width="44" height="14" rx="7"/>
+      </svg>
+      <span class="footer-text">Velo</span>
+    </a>
+
+    <div class="footer-base">
+      <span>Requires macOS 26 (Tahoe)+ · v1.0.0</span>
+      <span>Built by <a href="https://github.com/realvidhaan" target="_blank" rel="noopener">realvidhaan</a> · MIT</span>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

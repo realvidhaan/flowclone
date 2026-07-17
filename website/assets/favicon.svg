@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" role="img" aria-label="Velo app icon">
+  <rect width="300" height="300" rx="69" fill="#1B1B1B"></rect>
+  <g fill="#FFFDEC" transform="translate(69 72) scale(0.83)">
+    <rect x="8" y="57" width="16" height="56" rx="8"></rect>
+    <rect x="40" y="41" width="16" height="88" rx="8"></rect>
+    <rect x="72" y="24" width="16" height="122" rx="8"></rect>
+    <rect x="104" y="10" width="16" height="150" rx="8"></rect>
+    <rect x="158" y="10" width="16" height="150" rx="8"></rect>
+    <rect x="144" y="10" width="44" height="14" rx="7"></rect>
+    <rect x="144" y="146" width="44" height="14" rx="7"></rect>
+  </g>
+</svg>
