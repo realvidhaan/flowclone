@@ -1,0 +1,52 @@
+name: Deploy website
+
+# Redeploy the marketing site to Vercel whenever anything under website/ changes
+# on main. Requires one secret — VERCEL_TOKEN — plus the (non-secret) project
+# identifiers as repo variables VERCEL_ORG_ID and VERCEL_PROJECT_ID. Until the
+# token is set the deploy is skipped with a warning, so the workflow never fails.
+#
+# Set it up once:
+#   1. Create a token at https://vercel.com/account/tokens
+#   2. gh secret set VERCEL_TOKEN --repo realvidhaan/velo   (paste the token)
+# (VERCEL_ORG_ID / VERCEL_PROJECT_ID are pre-set as repo variables.)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - ".github/workflows/deploy-website.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-website
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for Vercel token
+        id: check
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::VERCEL_TOKEN secret not set — skipping deploy. Create a token at https://vercel.com/account/tokens then run: gh secret set VERCEL_TOKEN"
+          else
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Vercel CLI
+        if: steps.check.outputs.has_token == 'true'
+        run: npm i -g vercel@latest
+
+      - name: Deploy website/ to production
+        if: steps.check.outputs.has_token == 'true'
+        working-directory: website
+        run: vercel deploy --prod --yes --token="$VERCEL_TOKEN"

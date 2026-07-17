@@ -1,35 +1,56 @@
-name: Release
+name: Release DMG
+
+# Rebuild the downloadable DMG and keep the release fresh whenever the app code
+# changes on main. The website's "Download for macOS" button points at
+# releases/latest/download/Velo.dmg, so users always get the newest build.
+#
+# Behaviour: the release tag is derived from the app version
+# (CFBundleShortVersionString). Bump the version -> a new release is created and
+# marked "latest". Push code without bumping -> the current version's DMG asset
+# is refreshed in place. Either way the download stays current.
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "Resources/**"
+      - "Package.swift"
+      - "Package.resolved"
+      - "Scripts/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-dmg
+  cancel-in-progress: true
+
 jobs:
-  release:
+  dmg:
+    # Velo needs the macOS 26 SDK (SpeechAnalyzer, FoundationModels).
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build app bundle (release)
-        run: ./Scripts/build-app.sh release
+      - name: Build DMG
+        run: ./Scripts/package-dmg.sh
 
-      - name: Zip
+      - name: Sync GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cd build
-          ditto -c -k --keepParent Velo.app Velo.zip
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: build/Velo.zip
-          body: |
-            Velo ${{ github.ref_name }}
-
-            Unsigned / ad-hoc-signed build. On first launch, right-click the app
-            and choose **Open**, or run:
-            `xattr -dr com.apple.quarantine Velo.app`
-
-            Requires macOS 26 or later.
+          set -euo pipefail
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist)
+          TAG="v$VERSION"
+          NOTES="Automated build from ${GITHUB_SHA:0:7} on $(date -u +%Y-%m-%d). Requires macOS 26 (Tahoe)+. Self-signed — on first launch right-click Velo.app then Open, or run: xattr -dr com.apple.quarantine /Applications/Velo.app"
+          echo "App version $VERSION -> release $TAG"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists — refreshing its Velo.dmg asset"
+            gh release upload "$TAG" build/Velo.dmg --clobber
+          else
+            echo "Creating new release $TAG (marked latest)"
+            gh release create "$TAG" build/Velo.dmg --latest --title "$TAG" --notes "$NOTES"
+          fi
