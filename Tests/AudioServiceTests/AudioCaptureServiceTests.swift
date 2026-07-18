@@ -26,7 +26,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         tapFired.assertForOverFulfill = false
         service.onLevel = { _ in tapFired.fulfill() }
 
-        try service.start()
+        try await service.start()
         defer { service.stop() }
 
         // If the isolation bug were present, the process would SIGTRAP on the
@@ -55,17 +55,60 @@ final class AudioCaptureServiceTests: XCTestCase {
         let service = AudioCaptureService()
 
         // First cycle.
-        try service.start()
+        try await service.start()
         service.stop()
 
         // Second cycle — this is where the crash used to happen.
         let tapFired = expectation(description: "second start delivered a buffer")
         tapFired.assertForOverFulfill = false
         service.onLevel = { _ in tapFired.fulfill() }
-        try service.start()
+        try await service.start()
         defer { service.stop() }
 
         await fulfillment(of: [tapFired], timeout: 3.0)
+    }
+
+    /// Regression test for the "wait a while, press Fn → 'Couldn't start
+    /// microphone', can't dictate" bug: after idle the input hardware powers down
+    /// and reports a 0 Hz format for a beat, and the old *synchronous* retry
+    /// re-read that same 0 Hz instantly and failed. `retryingColdStart` must keep
+    /// retrying with a settle delay until an attempt succeeds. No audio hardware
+    /// needed — we drive the loop with a closure that fails the first two attempts
+    /// (as a cold 0 Hz read would) then succeeds.
+    @MainActor
+    func testColdStartRetriesUntilItSucceeds() async throws {
+        var attempts = 0
+        try await AudioCaptureService.retryingColdStart(
+            budget: .milliseconds(1000), delay: .milliseconds(10)
+        ) { n in
+            attempts = n
+            if n < 3 { throw AudioCaptureError.invalidInputFormat }  // hardware still waking
+        }
+        XCTAssertEqual(attempts, 3, "should retry past the transient 0 Hz reads and then succeed")
+    }
+
+    /// The retry is bounded: if the format never recovers, `start()` must give up
+    /// within the budget and rethrow rather than spin forever — so the pill shows
+    /// an actionable error instead of hanging.
+    @MainActor
+    func testColdStartGivesUpAfterBudget() async {
+        var attempts = 0
+        do {
+            try await AudioCaptureService.retryingColdStart(
+                budget: .milliseconds(120), delay: .milliseconds(20)
+            ) { n in
+                attempts = n
+                throw AudioCaptureError.invalidInputFormat  // never recovers
+            }
+            XCTFail("should have thrown after exhausting the budget")
+        } catch let error as AudioCaptureError {
+            guard case .invalidInputFormat = error else {
+                return XCTFail("should rethrow the last attempt's error, got \(error)")
+            }
+            XCTAssertGreaterThanOrEqual(attempts, 2, "should retry at least once before giving up")
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
     }
 
     /// Regression test for the sleep/wake crash: AVFAudio posts

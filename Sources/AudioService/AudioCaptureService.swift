@@ -72,37 +72,95 @@ public final class AudioCaptureService {
 
     // MARK: Lifecycle
 
-    public func start() throws {
+    /// How long to keep retrying a cold start before giving up. After the Mac has
+    /// idled, macOS powers the input hardware down; the input node then reports a
+    /// 0 Hz / 0 ch format for ~100–500 ms while the HAL and VoiceProcessingIO unit
+    /// spin back up. A *synchronous* retry re-reads that same 0 Hz instantly and
+    /// still fails — which is the "wait a while, press Fn, error, can't dictate"
+    /// bug — so we retry with a short sleep between attempts until the hardware
+    /// reports a real format or this budget is spent.
+    private static let coldStartBudget: Duration = .milliseconds(1500)
+    private static let coldStartRetryDelay: Duration = .milliseconds(120)
+
+    /// Starts capture, tolerating a powered-down mic after idle. Each attempt
+    /// (re)configures voice processing, prepares the engine, and installs the tap;
+    /// on failure it tears the engine down, waits a beat for the hardware to wake,
+    /// and retries until `coldStartBudget` is spent, then rethrows the last error.
+    /// `async` because the settle wait is the whole point — the old synchronous
+    /// retry never gave the hardware time to report a valid format.
+    public func start() async throws {
         guard !running else { return }
-        configureVoiceProcessing()
-        // Prepare *before* reading the input format. A stopped/idle engine's input
-        // node can report an invalid format (0 Hz / 0 channels); preparing pulls it
-        // back to the live hardware format. installTap then validates it.
-        engine.prepare()
-        do {
-            try installTapAndStart()
-        } catch {
-            // A stale or racy engine state (e.g. a config-change re-tap that just
-            // fired, or the IO unit mid-rebuild) can make the first installTap
-            // raise. Do ONE full clean-slate reset and retry; if it still fails,
-            // propagate so `startAudio()` shows the error and we stay alive.
-            log.error("Audio start failed once (\(String(describing: error), privacy: .public)); resetting engine and retrying")
-            hardResetEngine()
-            try installTapAndStart()
+        var lastAttempt = 0
+        try await Self.retryingColdStart(
+            budget: Self.coldStartBudget, delay: Self.coldStartRetryDelay
+        ) { attempt in
+            lastAttempt = attempt
+            configureVoiceProcessing()
+            // Prepare *before* reading the input format. A stopped/idle engine's
+            // input node can report an invalid format (0 Hz / 0 ch); preparing
+            // pulls it toward the live hardware format, which installTap validates.
+            engine.prepare()
+            do {
+                try installTapAndStart()
+            } catch {
+                // Stale/racy state (idle-powered-down input, a config-change re-tap
+                // mid-rebuild, or the IO unit still waking): tear down to a cold
+                // slate so the loop settles and retries on a fresh engine.
+                log.error("Audio start attempt \(attempt, privacy: .public) failed (\(String(describing: error), privacy: .public)); settling then retrying")
+                hardResetEngine()
+                throw error
+            }
         }
         running = true
-        log.info("Audio engine started")
+        log.info("Audio engine started (attempt \(lastAttempt, privacy: .public))")
     }
 
-    /// Tears the engine all the way down to a clean cold state so a retry starts
-    /// from scratch rather than from whatever partial state made the first attempt
-    /// raise.
+    /// Runs `attempt` (1-indexed) until it succeeds or `budget` elapses, sleeping
+    /// `delay` between tries, then rethrows the last error. Extracted so the
+    /// settle/retry timing is unit-testable without real audio hardware. The sleep
+    /// propagates cancellation — a quick key release aborts an in-flight start.
+    @MainActor
+    static func retryingColdStart(
+        budget: Duration,
+        delay: Duration,
+        attempt: (Int) async throws -> Void
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: budget)
+        var n = 0
+        while true {
+            n += 1
+            do {
+                try await attempt(n)
+                return
+            } catch {
+                if ContinuousClock.now >= deadline { throw error }
+                try await Task.sleep(for: delay)
+            }
+        }
+    }
+
+    /// Tears the engine down to a clean cold state so the next attempt starts from
+    /// scratch rather than from whatever partial state made the last one raise.
+    /// Voice-processing config + `prepare()` are re-done at the top of `start()`'s
+    /// retry loop, so they are intentionally not repeated here — repeating them
+    /// after the `reset()` was the ordering race that could tear down a
+    /// just-built VoiceProcessingIO unit right before the format read.
     private func hardResetEngine() {
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }
         engine.reset()
+    }
+
+    /// Best-effort: spin the input graph up ahead of the next capture so the first
+    /// Fn press after the Mac wakes isn't a cold start against powered-down input
+    /// hardware. Called from an `NSWorkspace.didWakeNotification` hook. Does not
+    /// start the engine (which would light the mic-in-use indicator) — `prepare()`
+    /// is enough to pull the input node toward a live hardware format.
+    public func prewarm() {
+        guard !running else { return }
         configureVoiceProcessing()
         engine.prepare()
+        log.info("Audio pre-warmed")
     }
 
     /// Toggles Apple voice processing on the input node. Must run **before**
@@ -154,16 +212,15 @@ public final class AudioCaptureService {
         // "already installed"; `removeTap` is a safe no-op when none is present.
         input.removeTap(onBus: 0)
 
-        var format = input.outputFormat(forBus: 0)
-        if format.channelCount == 0 || format.sampleRate == 0 {
-            // Input node went stale while idle. Reset + re-prepare to repull the
-            // live hardware format.
-            engine.reset()
-            engine.prepare()
-            format = input.outputFormat(forBus: 0)
-        }
+        // Read the live hardware format. After idle it can transiently be 0 Hz /
+        // 0 ch (input hardware still waking). Rather than reset+reread in-place
+        // here — which would tear down the voice-processing IO unit we just built —
+        // we throw and let start()'s retry loop settle and try again on a fresh
+        // cold engine. Installing a tap with a 0 Hz format raises an uncatchable
+        // Obj-C NSException, so validating first is load-bearing.
+        let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else {
-            log.error("Input format invalid (\(format.sampleRate, privacy: .public) Hz, \(format.channelCount, privacy: .public) ch)")
+            log.error("Input format invalid (\(format.sampleRate, privacy: .public) Hz, \(format.channelCount, privacy: .public) ch) — hardware still waking")
             throw AudioCaptureError.invalidInputFormat
         }
 
