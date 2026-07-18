@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreGraphics
 import os
 
@@ -28,6 +29,10 @@ public final class EventTap: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     private var thread: Thread?
     private var threadRunLoop: CFRunLoop?
+
+    /// Token for the wake observer that proactively re-enables the tap after
+    /// sleep, before the user's first post-wake press can be dropped.
+    private var wakeObserver: NSObjectProtocol?
 
     /// Whether the modifier hotkey is currently held (modifier flavor only).
     private var modifierHeld = false
@@ -98,11 +103,26 @@ public final class EventTap: @unchecked Sendable {
         thread.qualityOfService = .userInteractive
         self.thread = thread
         thread.start()
+
+        // macOS disables a session event tap across sleep; the FIRST post-wake
+        // press then arrives as a `tapDisabledByTimeout` (handled below) OR is lost
+        // entirely. Proactively re-enable + resync on wake so the user's first Fn
+        // press after the Mac wakes actually reaches us.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.reenableAndResync(reason: "wake")
+        }
+
         log.info("Event tap started for hotkey \(self.hotkey.displayName, privacy: .public)")
         return true
     }
 
     public func stop() {
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let rl = threadRunLoop, let source = runLoopSource {
             CFRunLoopRemoveSource(rl, source, .commonModes)
@@ -115,13 +135,45 @@ public final class EventTap: @unchecked Sendable {
         modifierHeld = false
     }
 
+    /// Re-enables the tap and reconciles `modifierHeld` against the live keyboard
+    /// flags. A `flagsChanged` edge dropped while the tap was disabled (across
+    /// sleep or a timeout) can otherwise leave `modifierHeld` stuck — a stuck-true
+    /// state would make the next real press emit an inverted/again event, and a
+    /// stuck DOWN means we owe a compensating `.up`. Safe to call from any thread:
+    /// `CGEvent.tapEnable` toggles a mach-port flag and `stateLock` guards the
+    /// shared state.
+    private func reenableAndResync(reason: String) {
+        if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+        // Inspect `hotkey` and mutate `modifierHeld` under the same lock the tap
+        // callback and `updateHotkey(_:)` use. Emitting the compensating `.up`
+        // while still holding the lock guarantees it is enqueued before any real
+        // `.down` the tap thread might produce next — otherwise a `.down` could
+        // jump ahead on the main queue and cancel the freshly started session.
+        stateLock.lock()
+        guard case .modifier(let modifier) = hotkey.kind else {
+            stateLock.unlock()
+            return
+        }
+        let held = CGEventSource.flagsState(.combinedSessionState).contains(modifier.flagMask)
+        let wasHeld = modifierHeld
+        modifierHeld = held
+        if wasHeld && !held {
+            // We thought the modifier was down but it is up now — emit the missed
+            // release so any in-flight session ends instead of hanging.
+            emit(.up)
+        }
+        stateLock.unlock()
+        log.notice("Event tap re-enabled (\(reason, privacy: .public)); modifier held=\(held, privacy: .public)")
+    }
+
     // MARK: Callback
 
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // The tap gets disabled if our callback is too slow or on user input
-        // during a debugger pause. Re-enable it immediately and pass through.
+        // The tap gets disabled if our callback is too slow, on user input during
+        // a debugger pause, or across sleep. Re-enable it AND resync modifier state
+        // (an edge during the disabled window was lost), then pass through.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            reenableAndResync(reason: type == .tapDisabledByTimeout ? "timeout" : "userInput")
             return Unmanaged.passUnretained(event)
         }
 

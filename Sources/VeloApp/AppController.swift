@@ -30,6 +30,10 @@ final class AppController: ObservableObject {
     /// the presence of a Groq key) changes — WhisperKit caches a loaded model, so
     /// we must not rebuild it per-session.
     private var cachedSTT: (engine: any TranscriptionEngine, choice: SettingsStore.STTChoice, hasKey: Bool, trimSilence: Bool)?
+    /// Last Groq key successfully read from the keychain, reused when a later read
+    /// *fails* (vs genuinely finding no key) so an idle-time keychain hiccup can't
+    /// rebuild `cachedSTT` into a key-less engine. See `sttEngine()`.
+    private var lastGoodGroqKey: String?
     private var session: (any TranscriptionSession)?
     private let injector: any TextInjector = PasteInjector()
 
@@ -78,6 +82,14 @@ final class AppController: ObservableObject {
     private let holdDebounce: Duration = .milliseconds(150)
     private var armTask: Task<Void, Never>?
 
+    /// Token for the `NSWorkspace.didWakeNotification` observer that pre-warms the
+    /// mic on wake, so the first Fn press after sleep isn't a cold start against
+    /// powered-down input hardware. `nonisolated(unsafe)` so the nonisolated
+    /// `deinit` can remove it — it is only ever assigned on the main actor in
+    /// `init`, and `deinit` runs when no other reference remains, so there is no
+    /// actual concurrent access.
+    nonisolated(unsafe) private var wakeObserver: NSObjectProtocol?
+
     init(dataStore: DataStore, settings: SettingsStore) {
         self.dataStore = dataStore
         self.settings = settings
@@ -100,6 +112,22 @@ final class AppController: ObservableObject {
         // Promote already-learned dictionary substitutions into active
         // replacement rules so accepted corrections finally take effect.
         dataStore.seedReplacementRulesFromDictionaryIfNeeded()
+
+        // Pre-warm the mic when the Mac wakes so the first Fn press after sleep
+        // spins up warm hardware instead of hitting a 0 Hz cold-start (the
+        // idle→"Couldn't start microphone" path). Best-effort; `prewarm()` only
+        // prepares the graph, it never lights the mic-in-use indicator.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in self?.audio.prewarm() }
+        }
+    }
+
+    deinit {
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
     }
 
     /// Re-applies the configured hotkeys (called when the user changes them).
@@ -150,6 +178,9 @@ final class AppController: ObservableObject {
         }
         accessibilityGranted = Accessibility.isTrusted
         microphoneGranted = AudioCaptureService.microphoneAuthorized
+        // Warm the audio graph once at launch too, so the very first dictation
+        // isn't a cold start against idle hardware.
+        audio.prewarm()
     }
 
     func retryHotkey() {
@@ -245,18 +276,39 @@ final class AppController: ObservableObject {
             detectCorrectionIfEnabled()
         }
 
-        // Start capturing immediately (cheap), but only reveal the pill and
-        // commit to the session after the debounce, so taps don't flicker. If the
-        // mic won't start, surface it instead of showing a dead recording pill.
-        guard startAudio() else {
-            showTransientError("Couldn't start microphone")
-            return
-        }
+        // Reveal the pill and start capture only after the debounce, so a quick
+        // accidental tap doesn't flicker the pill or spin up the mic. Starting the
+        // mic can take up to ~1.5s after long idle — the input hardware powers down
+        // and reports a 0 Hz format until it wakes — so `audio.start()` retries
+        // with a short settle delay and we AWAIT it here rather than failing the
+        // first cold press with "Couldn't start microphone" (the reported bug).
         let generation = sessionGeneration
         armTask = Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(for: self.holdDebounce)
-            guard !Task.isCancelled else { return }
+            // Bail if cancelled or if a newer session has superseded us (ABA
+            // guard): a stale arm task must never touch the newer session's audio,
+            // indicator, or armTask. The cold start below can take up to ~1.5s, so
+            // a release + fresh press can easily supersede us mid-flight.
+            guard !Task.isCancelled, generation == self.sessionGeneration else { return }
+            self.audio.voiceProcessing = self.settings.voiceProcessing
+            if let startError = await self.startAudio() {
+                // If a newer session armed while we were (slowly) cold-starting it
+                // now owns the shared engine — leave it be. Only clean up and
+                // surface the failure when we're still the current session.
+                guard generation == self.sessionGeneration else { return }
+                self.stopAudio()
+                if !Task.isCancelled {
+                    self.showTransientError(Self.micErrorMessage(for: startError))
+                }
+                self.armTask = nil
+                return
+            }
+            // Superseded after a successful start? the newer session shares this
+            // engine, so don't stop it; only stop audio we still own (a plain
+            // release of *this* session).
+            guard generation == self.sessionGeneration else { return }
+            guard !Task.isCancelled else { self.stopAudio(); return }
             self.transition(.hotkeyDown(mode))
             self.indicator.show(.recording)
             await self.startSession(generation: generation)
@@ -438,7 +490,23 @@ final class AppController: ObservableObject {
     /// when the choice or Groq-key presence changes.
     private func sttEngine() -> any TranscriptionEngine {
         let choice = settings.sttChoice
-        let key = KeychainStore.get(.groqAPIKey)
+        // Distinguish "no key" from "keychain read failed". A transient read
+        // failure after idle used to collapse to nil, flip `hasKey` false, and
+        // rebuild `cachedSTT` into a key-less GroqWhisperEngine that then threw
+        // "Groq API key not set" on the next press — reuse the last-known-good key
+        // instead so a keychain hiccup can't poison the cached engine.
+        let key: String?
+        switch KeychainStore.read(.groqAPIKey) {
+        case .value(let value):
+            key = value
+            lastGoodGroqKey = value
+        case .absent:
+            key = nil
+            lastGoodGroqKey = nil
+        case .failed(let status):
+            key = lastGoodGroqKey
+            log.error("Keychain read failed (OSStatus \(status, privacy: .public)); reusing last-known-good Groq key")
+        }
         let hasKey = (key?.isEmpty == false)
         let trim = settings.trimSilence
         if let cached = cachedSTT, cached.choice == choice, cached.hasKey == hasKey, cached.trimSilence == trim {
@@ -658,18 +726,32 @@ final class AppController: ObservableObject {
 
     // MARK: Audio
 
-    @discardableResult
-    private func startAudio() -> Bool {
+    /// Starts the mic, tolerating a cold engine after idle (the async settle-retry
+    /// lives in `AudioCaptureService.start()`). Returns `nil` on success, or the
+    /// error that ultimately failed the start so the caller can pick a specific
+    /// pill message. `voiceProcessing` is set by the caller before this runs so a
+    /// Settings toggle takes effect on the next dictation (VP-IO can only be
+    /// reconfigured while the engine is idle).
+    private func startAudio() async -> Error? {
         do {
-            // Applied per-start so a Settings toggle takes effect on the next
-            // dictation (VP-IO can only be reconfigured while the engine is idle).
-            audio.voiceProcessing = settings.voiceProcessing
-            try audio.start()
-            return true
+            try await audio.start()
+            return nil
+        } catch is CancellationError {
+            return CancellationError()
         } catch {
             log.error("Audio start failed: \(error.localizedDescription, privacy: .public)")
-            return false
+            return error
         }
+    }
+
+    /// Maps an audio-start failure to a short, actionable pill message. A stale
+    /// 0 Hz format after idle is transient (the retry budget was just exhausted),
+    /// so tell the user to try again rather than implying the mic is broken.
+    private static func micErrorMessage(for error: Error) -> String {
+        if case AudioCaptureError.invalidInputFormat = error {
+            return "Mic warming up — try again"
+        }
+        return "Couldn't start microphone"
     }
 
     private func stopAudio() {

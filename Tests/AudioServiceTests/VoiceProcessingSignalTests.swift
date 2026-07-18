@@ -33,7 +33,7 @@ final class VoiceProcessingSignalTests: XCTestCase {
             box.update(p)
         }
 
-        try service.start()
+        try await service.start()
         try await Task.sleep(for: .seconds(2))
         service.stop()
 
