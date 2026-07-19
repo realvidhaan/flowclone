@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuartzCore
 import IndicatorUI
 
 /// Owns a borderless, non-activating floating `NSPanel` that hosts the SwiftUI
@@ -15,6 +16,30 @@ final class IndicatorController {
         ensurePanel()
         reposition()
         panel?.orderFrontRegardless()
+        // Ordering a window front only *marks* it for display on the next run-loop
+        // pass. The recording pill is shown immediately before the caller dives
+        // into synchronous session setup (a main-thread keychain read in
+        // `sttEngine()`, dictionary/DB queries) that can hold the main thread long
+        // enough to swallow that pass — leaving the panel `isVisible == true` but
+        // never painted. Force the content to render now so the pill is on screen
+        // the instant recording starts, regardless of what the caller does next.
+        forceImmediateRender()
+    }
+
+    /// Synchronously lays out, draws, and *composites* the panel's hosting view so
+    /// its pixels reach the screen before control returns, instead of on a later
+    /// (possibly delayed) run-loop pass. `NSHostingView` is layer-backed, so
+    /// `display()` alone only updates its Core Animation layer in-process — the
+    /// WindowServer shows it only once the current `CATransaction` commits, which
+    /// normally waits for the run loop. If the caller then blocks the main thread
+    /// (e.g. a synchronous keychain read in session setup) that commit never fires
+    /// and the "visible" panel stays blank. `CATransaction.flush()` pushes the
+    /// layer state to the render server immediately, so the pill appears now.
+    private func forceImmediateRender() {
+        guard let panel else { return }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        CATransaction.flush()
     }
 
     func update(level: Float) {
