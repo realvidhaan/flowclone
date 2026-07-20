@@ -31,6 +31,9 @@ public struct IndicatorView: View {
         Group {
             switch model.state {
             case .hidden:
+                // Ordering the panel out is the authoritative hide; this case is
+                // the initial state and the resting place for the 0.15s state
+                // animation, not a second hiding mechanism.
                 EmptyView()
             case .recording:
                 pill { WaveformBars(level: model.level) }
