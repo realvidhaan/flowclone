@@ -336,6 +336,9 @@ final class AppController: ObservableObject {
             }
         } catch {
             log.error("Failed to start STT session: \(error.localizedDescription, privacy: .public)")
+            // A stale failure must not stamp its error onto a newer session's pill
+            // or state machine — the success path above already guards this way.
+            guard generation == sessionGeneration else { return }
             indicator.present(.error("Speech model unavailable"))
             transition(.failed("Speech model unavailable"))
             scheduleErrorReset()
@@ -427,6 +430,7 @@ final class AppController: ObservableObject {
             recordHistory(raw: transcript, cleaned: cleaned, llmEngine: llmName)
         } catch {
             log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
+            guard generation == sessionGeneration else { return }
             indicator.present(.error("Transcription failed"))
             transition(.failed("Transcription failed"))
             scheduleErrorReset()
@@ -581,6 +585,7 @@ final class AppController: ObservableObject {
             inject(edited)
         } catch {
             log.error("Command edit failed: \(error.localizedDescription, privacy: .public)")
+            guard generation == sessionGeneration else { return }
             indicator.present(.error("Couldn't edit selection"))
             transition(.failed("Command failed"))
             scheduleErrorReset()
