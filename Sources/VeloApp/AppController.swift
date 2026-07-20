@@ -310,7 +310,7 @@ final class AppController: ObservableObject {
             guard generation == self.sessionGeneration else { return }
             guard !Task.isCancelled else { self.stopAudio(); return }
             self.transition(.hotkeyDown(mode))
-            self.indicator.show(.recording)
+            self.indicator.present(.recording)
             await self.startSession(generation: generation)
             // Only clear if this is still our session — a slow `makeSession` could
             // otherwise resume after a newer session has armed and null its task.
@@ -336,7 +336,7 @@ final class AppController: ObservableObject {
             }
         } catch {
             log.error("Failed to start STT session: \(error.localizedDescription, privacy: .public)")
-            indicator.setState(.error("Speech model unavailable"))
+            indicator.present(.error("Speech model unavailable"))
             transition(.failed("Speech model unavailable"))
             scheduleErrorReset()
         }
@@ -355,7 +355,7 @@ final class AppController: ObservableObject {
         case .recording:
             releaseTime = Date()
             transition(.hotkeyUp)          // -> transcribing
-            indicator.setState(.processing)
+            indicator.present(.processing)
             Task { [weak self] in await self?.finishTranscription() }
         default:
             // Debounce hadn't fired, or an error is showing: nothing to finalize.
@@ -427,7 +427,7 @@ final class AppController: ObservableObject {
             recordHistory(raw: transcript, cleaned: cleaned, llmEngine: llmName)
         } catch {
             log.error("Transcription failed: \(error.localizedDescription, privacy: .public)")
-            indicator.setState(.error("Transcription failed"))
+            indicator.present(.error("Transcription failed"))
             transition(.failed("Transcription failed"))
             scheduleErrorReset()
         }
@@ -581,7 +581,7 @@ final class AppController: ObservableObject {
             inject(edited)
         } catch {
             log.error("Command edit failed: \(error.localizedDescription, privacy: .public)")
-            indicator.setState(.error("Couldn't edit selection"))
+            indicator.present(.error("Couldn't edit selection"))
             transition(.failed("Command failed"))
             scheduleErrorReset()
         }
@@ -601,10 +601,12 @@ final class AppController: ObservableObject {
     /// Shows an error on the pill for ~1.5s without touching the state machine
     /// (used for pre-session failures like "no selection").
     private func showTransientError(_ message: String) {
-        indicator.show(.error(message))
+        // Dismiss by token: the user can start a real recording inside the 1.5s
+        // window, and this timer must not take that session's pill down with it.
+        let token = indicator.present(.error(message))
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(1500))
-            self?.indicator.hide()
+            self?.indicator.hide(token: token)
         }
     }
 
@@ -675,17 +677,17 @@ final class AppController: ObservableObject {
             captureCorrectionBaseline()
         } catch InjectionError.secureInputActive {
             log.notice("Secure input active; text left on clipboard")
-            indicator.setState(.error("Secure field — copied instead"))
+            indicator.present(.error("Secure field — copied instead"))
             transition(.failed("Secure field — copied instead"))
             scheduleErrorReset()
         } catch InjectionError.accessibilityNotGranted {
             log.notice("Accessibility not granted; cannot inject")
-            indicator.setState(.error("Grant Accessibility to insert text"))
+            indicator.present(.error("Grant Accessibility to insert text"))
             transition(.failed("Grant Accessibility"))
             scheduleErrorReset()
         } catch {
             log.error("Injection failed: \(error.localizedDescription, privacy: .public)")
-            indicator.setState(.error("Couldn't insert text"))
+            indicator.present(.error("Couldn't insert text"))
             transition(.failed("Injection failed"))
             scheduleErrorReset()
         }
